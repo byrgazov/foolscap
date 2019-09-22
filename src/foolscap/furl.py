@@ -21,7 +21,7 @@ def decode_furl(furl):
         # extensions.
         tubID_s = mo_auth_furl.group(1)
         tubID = tubID_s[:32]
-        if not base32.is_base32(tubID):
+        if not base32.is_base32(tubID.encode('ascii')):
             raise BadFURLError("'%s' is not a valid tubid" % (tubID,))
         hints = mo_auth_furl.group(2)
         location_hints = hints.split(",")

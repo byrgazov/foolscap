@@ -469,12 +469,12 @@ def run_flappserver(argv=None, run_by_human=True):
             stash_rc = []
             def good(rc):
                 stash_rc.append(rc)
-                reactor.stop()
+                reactor.callLater(0, reactor.stop)
             def oops(f):
                 print("Command failed:")
                 print(f)
                 stash_rc.append(-1)
-                reactor.stop()
+                reactor.callLater(0, reactor.stop)
             r.addCallbacks(good, oops)
             if 0 == len(stash_rc):
                 reactor.run()

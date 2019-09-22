@@ -277,7 +277,7 @@ def run_flappclient(argv=None, run_by_human=True, stdio=StandardIO):
             reactor.stop()
         d.addCallbacks(good, oops)
         reactor.run()
-        sys.exit(stash_rc[0])
+        sys.exit(stash_rc[0] if stash_rc else 1)
     else:
         def _convert_system_exit(f):
             f.trap(SystemExit)

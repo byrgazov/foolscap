@@ -56,7 +56,7 @@ class FoolscapContextFactory(CertificateOptions):
         return ctx
 
 def digest32(colondigest):
-    digest = "".join([chr(int(c,16)) for c in colondigest.split(":")])
+    digest = bytes(int(c, 16) for c in colondigest.split(b":"))
     digest = base32.encode(digest)
     return digest
 

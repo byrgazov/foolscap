@@ -177,7 +177,7 @@ class Negotiation(protocol.Protocol):
             # should be a dict of keys or something. distinguish between
             # offer and decision.
             self.negotiationOffer['negotiation-forced'] = "True"
-        self.buffer = ""
+        self.buffer = b""
         self._test_options = {}
         # to trigger specific race conditions during unit tests, it is useful
         # to allow certain operations to be stalled for a moment.
@@ -212,6 +212,9 @@ class Negotiation(protocol.Protocol):
             kwargs['facility'] = "foolscap.negotiation"
         if 'level' not in kwargs:
             kwargs['level'] = log.NOISY
+        if isinstance(kwargs.get('failure'), Failure):
+#           return log.err(kwargs.pop('failure'), *args, **kwargs)
+            kwargs.setdefault('isError', 1)
         return log.msg(*args, **kwargs)
 
     def initClient(self, connector, targetHost, connectionInfo):
@@ -242,7 +245,8 @@ class Negotiation(protocol.Protocol):
         # the broker class is set when we find out which Tub we should use
 
     def parseLines(self, header):
-        lines = header.split("\r\n")
+        header = header.decode('ascii')
+        lines  = header.split("\r\n")
         block = {}
         for line in lines:
             colon = line.index(":")
@@ -253,8 +257,24 @@ class Negotiation(protocol.Protocol):
 
     def sendBlock(self, block):
         for k in sorted(block.keys()):
-            self.transport.write("%s: %s\r\n" % (k.lower(), block[k]))
-        self.transport.write("\r\n") # end block
+            # @xxx: [bw] какого типа ключи и значения?
+            v = block[k]
+            v_type = type(v)
+
+            assert type(k) is str, (type(k), k)
+            assert v_type in (int, str, bytes), (type(v), v)
+
+            k = k.encode('ascii').lower()
+
+            if   v_type is str: v = v.encode('ascii')
+            elif v_type is int: v = str(v).encode('ascii')
+
+            assert b'\n' not in k and b'\r' not in k, k
+            assert b'\n' not in v and b'\r' not in v, v
+
+            self.transport.write(b'%s: %s\r\n' % (k, v))
+
+        self.transport.write(b'\r\n') # end block
 
     def debug_doTimer(self, name, timeout, call, *args):
         if ("debug_slow_%s" % name in self._test_options) and \
@@ -319,13 +339,18 @@ class Negotiation(protocol.Protocol):
         # TubConnector (if any) gets told about the results of the connection
         # attempt.
 
-        if self.doNegotiation:
-            if self.isClient:
-                self.connectionMadeClient()
+        try:
+            if self.doNegotiation:
+                if self.isClient:
+                    self.connectionMadeClient()
+                else:
+                    self.connectionMadeServer()
             else:
-                self.connectionMadeServer()
-        else:
-            self.switchToBanana({})
+                self.switchToBanana({})
+        except Exception:
+            # @xxx: это должен делать Twisted, иначе зависнет
+            self.failureReason = Failure()
+            self.transport.loseConnection()  # @xxx: ConnectionMixin.loseConnection has no reason
 
     def connectionMadeClient(self):
         assert self.receive_phase == PLAINTEXT
@@ -338,13 +363,13 @@ class Negotiation(protocol.Protocol):
         req = []
         self.log("sendPlaintextClient: GET for tubID %s" %
                  self.target.tubID)
-        req.append("GET /id/%s HTTP/1.1" % self.target.tubID)
-        req.append("Host: %s" % self.targetHost)
+        req.append(b"GET /id/%s HTTP/1.1" % self.target.tubID.encode('ascii'))
+        req.append(b"Host: %s" % self.targetHost.encode('ascii'))
         self.log("sendPlaintextClient: wantEncryption=True")
-        req.append("Upgrade: TLS/1.0")
-        req.append("Connection: Upgrade")
-        self.transport.write("\r\n".join(req))
-        self.transport.write("\r\n\r\n")
+        req.append(b"Upgrade: TLS/1.0")
+        req.append(b"Connection: Upgrade")
+        self.transport.write(b"\r\n".join(req))
+        self.transport.write(b"\r\n\r\n")
         # the next thing the other end expects to see is the encrypted phase
         self.send_phase = ENCRYPTED
 
@@ -392,7 +417,7 @@ class Negotiation(protocol.Protocol):
             # we accumulate a header block for each phase
             if len(self.buffer) > 4096:
                 raise BananaError("Header too long")
-            eoh = self.buffer.find('\r\n\r\n')
+            eoh = self.buffer.find(b'\r\n\r\n')
             if eoh == -1:
                 return
             header, self.buffer = self.buffer[:eoh], self.buffer[eoh+4:]
@@ -411,7 +436,7 @@ class Negotiation(protocol.Protocol):
             # self.buffer will be emptied when we switchToBanana, so in that
             # case we won't call the wrong dataReceived.
             if self.buffer:
-                self.dataReceived("")
+                self.dataReceived(b'')
 
         except Exception as e:
             why = Failure()
@@ -428,13 +453,11 @@ class Negotiation(protocol.Protocol):
                     errmsg = "internal server error, see logs"
                 errmsg = errmsg.replace("\n", " ").replace("\r", " ")
                 if self.send_phase == PLAINTEXT:
-                    resp = ("HTTP/1.1 500 Internal Server Error: %s\r\n\r\n"
-                            % errmsg)
+                    resp = b"HTTP/1.1 500 Internal Server Error: %s\r\n\r\n" % errmsg.encode('ascii', 'replace')
                     self.transport.write(resp)
                 elif self.send_phase in (ENCRYPTED, DECIDING):
                     block = {'banana-decision-version': 1,
-                             'error': errmsg,
-                             }
+                             'error': errmsg.encode('ascii', 'replace')}
                     self.sendBlock(block)
                 elif self.send_phase == BANANA:
                     self.sendBananaError(errmsg)
@@ -446,6 +469,7 @@ class Negotiation(protocol.Protocol):
     def sendBananaError(self, msg):
         if len(msg) > SIZE_LIMIT:
             msg = msg[:SIZE_LIMIT-10] + "..."
+        msg = msg.encode('utf8', 'replace')
         int2b128(len(msg), self.transport.write)
         self.transport.write(ERROR)
         self.transport.write(msg)
@@ -472,7 +496,8 @@ class Negotiation(protocol.Protocol):
 
     def handlePLAINTEXTServer(self, header):
         # the client sends us a GET message
-        lines = header.split("\r\n")
+        header = header.decode('ascii')
+        lines  = header.split("\r\n")
         if not lines[0].startswith("GET "):
             raise BananaError("not right")
         command, url, version = lines[0].split()
@@ -513,12 +538,12 @@ class Negotiation(protocol.Protocol):
         if self.debug_doTimer("sendPlaintextServer", 1,
                               self.sendPlaintextServerAndStartENCRYPTED):
             return
-        resp = "\r\n".join(["HTTP/1.1 101 Switching Protocols",
-                            "Upgrade: TLS/1.0, PB/1.0",
-                            "Connection: Upgrade",
+        resp = b"\r\n".join([b"HTTP/1.1 101 Switching Protocols",
+                             b"Upgrade: TLS/1.0, PB/1.0",
+                             b"Connection: Upgrade",
                             ])
         self.transport.write(resp)
-        self.transport.write("\r\n\r\n")
+        self.transport.write(b"\r\n\r\n")
         # the next thing they expect is the encrypted block
         self.send_phase = ENCRYPTED
         self.startENCRYPTED()
@@ -531,7 +556,8 @@ class Negotiation(protocol.Protocol):
 
     def handlePLAINTEXTClient(self, header):
         self.log("handlePLAINTEXTClient: header='%s'" % header)
-        lines = header.split("\r\n")
+        header = header.decode('ascii')
+        lines  = header.split("\r\n")
         tokens = lines[0].split()
         # TODO: accept a 303 redirect
         if tokens[1] != "101":
@@ -575,10 +601,8 @@ class Negotiation(protocol.Protocol):
             IR = self.tub.getIncarnationString()
             hello['my-incarnation'] = IR
 
-        self.log("Negotiate.sendHello (isClient=%s): %s" %
-                 (self.isClient, hello))
+        self.log("Negotiate.sendHello (isClient=%s): %s" % (self.isClient, hello))
         self.sendBlock(hello)
-
 
     def handleENCRYPTED(self, header):
         # both ends have sent a Hello message
@@ -614,8 +638,7 @@ class Negotiation(protocol.Protocol):
             - We are not the master: DECISION is None
         """
 
-        self.log("evaluateHello(isClient=%s): offer=%s" %
-                 (self.isClient, offer))
+        self.log("evaluateHello(isClient=%s): offer=%s" % (self.isClient, offer))
         if 'banana-negotiation-range' not in offer:
             if 'banana-negotiation-version' in offer:
                 msg = ("Peer is speaking foolscap-0.0.5 or earlier, "
@@ -678,7 +701,7 @@ class Negotiation(protocol.Protocol):
         else:
             # verify that their claimed TubID matches their SSL certificate.
             # TODO: handle chains
-            digest = crypto.digest32(self.theirCertificate.digest("sha1"))
+            digest = crypto.digest32(self.theirCertificate.digest("sha1")).decode('ascii')
             if digest != theirTubID:
                 # this is where a good MitM attack is detected, one which
                 # encrypts the connection but which of course uses the wrong
@@ -1004,8 +1027,7 @@ class Negotiation(protocol.Protocol):
     def acceptDecisionVersion1(self, decision):
         if "error" in decision:
             error = decision["error"]
-            raise RemoteNegotiationError("Banana negotiation failed: %s"
-                                         % error)
+            raise RemoteNegotiationError("Banana negotiation failed: %s" % error)
 
         # parse the decision here, create the connection parameters dict
         ver = int(decision['banana-decision-version'])
@@ -1117,7 +1139,7 @@ class Negotiation(protocol.Protocol):
         self.connectionLost = b.connectionLost
 
         b.makeConnection(self.transport)
-        buf, self.buffer = self.buffer, "" # empty our buffer, just in case
+        buf, self.buffer = self.buffer, b"" # empty our buffer, just in case
         b.dataReceived(buf) # and hand it to the new protocol
 
         self._connectionInfo._set_connected(True)

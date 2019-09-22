@@ -1,5 +1,6 @@
 # -*- test-case-name: foolscap.test.test_banana -*-
 
+import functools
 import types
 from zope.interface import implementer
 from twisted.internet.defer import Deferred
@@ -70,7 +71,7 @@ class RootSlicer:
     def __iter__(self):
         return self # we are our own iterator
     def next(self):
-        return self.__next__()  
+        return self.__next__()
     def __next__(self):
         if self.objectSentDeferred:
             self.objectSentDeferred.callback(None)
@@ -161,7 +162,7 @@ class RootUnslicer(BaseUnslicer):
         for r in self.topRegistries + self.openRegistries:
             for k in r.keys():
                 keys.append(len(k[0]))
-        self.maxIndexLength = reduce(max, keys)
+        self.maxIndexLength = functools.reduce(max, keys)
 
     def start(self, count):
         pass

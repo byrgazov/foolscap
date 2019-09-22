@@ -25,7 +25,7 @@ from foolscap.furl import decode_furl
 
 @implementer(ipb.IReferenceable)
 class OnlyReferenceable(object):
-    
+
     def processUniqueID(self):
         return id(self)
 
@@ -804,7 +804,6 @@ class SturdyRef(Copyable, RemoteCopy):
     def getTubRef(self):
         return TubRef(self.tubID, self.locationHints)
 
-
     def getURL(self):
         return self.url
 
@@ -819,13 +818,19 @@ class SturdyRef(Copyable, RemoteCopy):
 
     def __hash__(self):
         return hash(self._distinguishers())
-    def __cmp__(self, them):
-        return (cmp(type(self), type(them)) or
-                cmp(self.__class__, them.__class__) or
-                cmp(self._distinguishers(), them._distinguishers()))
+
+    def __eq__(self, other):
+        if type(other) is type(self):
+            return self._distinguishers() == other._distinguishers()
+        return NotImplemented
+
+    def __lt__(self, other):
+        if type(other) is type(self):
+            return self._distinguishers() < other._distinguishers()
+        return NotImplemented
 
 
-class TubRef(object):
+class TubRef:
     """This is a little helper class which provides a comparable identifier
     for Tubs. TubRefs can be used as keys in dictionaries that track
     connections to remote Tubs."""
@@ -856,7 +861,13 @@ class TubRef(object):
 
     def __hash__(self):
         return hash(self._distinguishers())
-    def __cmp__(self, them):
-        return (cmp(type(self), type(them)) or
-                cmp(self.__class__, them.__class__) or
-                cmp(self._distinguishers(), them._distinguishers()))
+
+    def __eq__(self, other):
+        if type(other) is type(self):
+            return self._distinguishers() == other._distinguishers()
+        return NotImplemented
+
+    def __lt__(self, other):
+        if type(other) is type(self):
+            return self._distinguishers() < other._distinguishers()
+        return NotImplemented

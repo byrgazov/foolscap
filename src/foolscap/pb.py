@@ -115,8 +115,8 @@ class Listener(protocol.ServerFactory, service.Service):
         return desc
 
 def generateSwissnumber(bits):
-    bytes = os.urandom(bits/8)
-    return base32.encode(bytes)
+    bytes = os.urandom(int(bits/8))
+    return base32.encode(bytes).decode('ascii')
 
 @implementer(ipb.ITub)
 class Tub(service.MultiService):
@@ -212,10 +212,10 @@ class Tub(service.MultiService):
         else:
             cert = self.createCertificate()
         self.myCertificate = cert
-        self.tubID = crypto.digest32(cert.digest("sha1"))
+        self.tubID = crypto.digest32(cert.digest("sha1")).decode('ascii')
 
     def make_incarnation(self):
-        unique = binascii.b2a_hex(os.urandom(8))
+        unique = binascii.b2a_hex(os.urandom(8)).decode('ascii')
         # TODO: it'd be nice to have a sequential component, so incarnations
         # could be ordered, but it requires disk space
         sequential = None
@@ -982,8 +982,8 @@ class Tub(service.MultiService):
         # this doesn't confuse us.
 
         # the Broker will have already severed all active references
-        for tubref in self.brokers.keys():
-            if self.brokers[tubref] is broker:
+        for tubref, value in list(self.brokers.items()):
+            if value is broker:
                 del self.brokers[tubref]
 
     def debug_listBrokers(self):

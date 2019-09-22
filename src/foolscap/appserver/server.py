@@ -12,7 +12,8 @@ class UnknownVersion(Exception):
 def load_service_data(basedir):
     services_file = os.path.join(basedir, "services.json")
     if os.path.exists(services_file):
-        data = json.load(open(services_file, "rb"))
+        with open(services_file, "r") as f:
+            data = json.load(f)
         if data["version"] != 1:
             raise UnknownVersion("unable to handle version %d" % data["version"])
     else:
@@ -55,10 +56,9 @@ def load_service_data(basedir):
 def save_service_data(basedir, data):
     assert data["version"] == 1
     services_file = os.path.join(basedir, "services.json")
-    tmpfile = services_file+".tmp"
-    f = open(tmpfile, "wb")
-    json.dump(data, f, indent=2)
-    f.close()
+    tmpfile = services_file + ".tmp"
+    with open(tmpfile, "w") as f:
+        json.dump(data, f, indent=2)
     move_into_place(tmpfile, services_file)
 
 class AppServer(service.MultiService):

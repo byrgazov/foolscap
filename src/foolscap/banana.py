@@ -1,7 +1,6 @@
 
 import six
 import struct, time
-from past.builtins import long
 from twisted.internet import protocol, defer, reactor
 from twisted.python.failure import Failure
 from twisted.python import log
@@ -11,7 +10,6 @@ from twisted.python import log
 from foolscap.slicers.allslicers import RootSlicer, RootUnslicer
 from foolscap.slicers.allslicers import ReplaceVocabSlicer, AddVocabSlicer
 
-from . import stringchain
 from . import tokens
 from .tokens import (SIZE_LIMIT, STRING, LIST, INT, NEG,
      LONGINT, LONGNEG, VOCAB, FLOAT, OPEN, CLOSE, ABORT, ERROR,
@@ -19,15 +17,15 @@ from .tokens import (SIZE_LIMIT, STRING, LIST, INT, NEG,
      BananaError, BananaFailure, Violation)
 
 EPSILON = 0.1
-    
+
 def int2b128(integer, stream):
     if integer == 0:
-        stream(chr(0))
-        return
-    assert integer > 0, "can only encode positive integers"
-    while integer:
-        stream(chr(integer & 0x7f))
-        integer = integer >> 7
+        stream(b'\x00')
+    else:
+        assert integer > 0, "can only encode positive integers"
+        while integer:
+            stream(bytes((integer & 0x7f,)))
+            integer = integer >> 7
 
 def b1282int(st):
     # NOTE that this is little-endian
@@ -89,7 +87,7 @@ def bytes_to_long(s):
         acc = (acc << 32) + unpack('>I', s[i:i+4])[0]
     return long(acc)
 
-HIGH_BIT_SET = chr(0x80)
+HIGH_BIT_SET = 0x80
 
 
 
@@ -206,7 +204,7 @@ class Banana(protocol.Protocol):
                     obj.addErrback(self._slice_error, s)
                     # this is the primary exit point
                     break
-                elif type(obj) in (int, long, float, str):
+                elif type(obj) in (int, float, str):
                     # sendToken raises a BananaError for weird tokens
                     self.sendToken(obj)
                 else:
@@ -304,7 +302,6 @@ class Banana(protocol.Protocol):
             else:
                 break
 
-
         # the parent wants to forge ahead
 
     def newSlicerFor(self, obj):
@@ -343,12 +340,8 @@ class Banana(protocol.Protocol):
         # methods which are *not* generators.
 
         itr = iter(slicer.slice(topSlicer.streamable, self))
-        
-        if six.PY2:
-            next_itr = itr.next
-        else:
-            next_itr = itr.__next__
-            
+        next_itr = itr.__next__
+
         # we are now committed to sending the OPEN token, meaning that
         # failures after this point will cause an ABORT/CLOSE to be sent
 
@@ -489,7 +482,7 @@ class Banana(protocol.Protocol):
 
     def sendToken(self, obj):
         write = self.transport.write
-        if isinstance(obj, (int, long)):
+        if isinstance(obj, int):
             if obj >= 2**31:
                 s = long_to_bytes(obj)
                 int2b128(len(s), write)
@@ -591,7 +584,7 @@ class Banana(protocol.Protocol):
         # self.buffer with the inbound negotiation block.
         self.negotiated = False
         self.connectionAbandoned = False
-        self.buffer = stringchain.StringChain()
+        self.buffer = BufferChain()
 
         self.incomingVocabulary = {}
         self.skipBytes = 0 # used to discard a single long token
@@ -1195,3 +1188,146 @@ class Banana(protocol.Protocol):
     def reportViolation(self, why):
         return why
 
+# Note: when changing this class, you should un-comment all the lines that say
+# "assert self._assert_invariants()".
+
+class BufferChain:
+    def __init__(self):
+        self.__data = collections.deque()
+        self.ignored = 0
+        self.tailignored = 0
+        self.size = 0
+
+    def __len__(self):
+        #assert self._assert_invariants()
+        return self.size
+
+    def __bool__(self):
+        return 0 < self.size
+
+    def __bytes__(self):
+        self._collapse()
+        if self.__data:
+            assert len(self.__data) == 1, len(self.__data)
+            return self.__data[0]
+        return b''
+
+    def append(self, data):
+        """ Add s to the end of the chain. """
+        #assert self._assert_invariants()
+        if data:
+            # First trim off any ignored tail bytes.
+            if self.tailignored:
+                self.__data[-1] = self.__data[-1][:-self.tailignored]
+                self.tailignored = 0
+
+            self.__data.append(data)
+            self.size += len(data)
+            #assert self._assert_invariants()
+
+    def appendleft(self, data):
+        """ Add s to the beginning of the chain. """
+        #assert self._assert_invariants()
+        if data:
+            # First trim off any ignored bytes.
+            if self.ignored:
+                self.__data[0] = self.__data[0][self.ignored:]
+                self.ignored = 0
+
+            self.__data.appendleft(data)
+            self.size += len(data)
+            #assert self._assert_invariants()
+
+    def popleft(self, size):
+        """ Remove some of the leading bytes of the chain and return them as a
+    string. """
+
+        #assert self._assert_invariants()
+        if not size or not self.__data:
+            return b''
+
+        assert 0 < size, size
+
+        # We need to add at least this many bytes to the result.
+        bytesleft = size
+        resstrs   = []
+
+        data = self.__data.popleft()
+
+        if self.ignored:
+            data = data[self.ignored:]
+            self.ignored = 0
+
+        self.size -= len(data)
+        resstrs.append(data)
+        bytesleft -= len(data)
+
+        while 0 < bytesleft and self.__data:
+            data = self.__data.popleft()
+            self.size -= len(data)
+            resstrs.append(data)
+            bytesleft -= len(data)
+
+        overrun = - bytesleft
+
+        if 0 < overrun:
+            self.__data.appendleft(data)
+            self.ignored = len(data) - overrun
+            self.size += overrun
+            resstrs[-1] = resstrs[-1][:-overrun]
+
+        resstr = b''.join(resstrs)
+
+        # Either you got exactly how many you asked for, or you drained self entirely and you asked for more than you got.
+        #assert (len(resstr) == bytes) or ((not self.__data) and (bytes > self.size)), (len(resstr), bytes, len(self.__data), overrun)
+
+        #assert self._assert_invariants()
+
+        return resstr
+
+    def clear(self):
+        """ Empty it out. """
+        #assert self._assert_invariants()
+        self.__data.clear()
+        self.ignored = 0
+        self.tailignored = 0
+        self.size    = 0
+        #assert self._assert_invariants()
+
+    def _assert_invariants(self):
+        assert self.ignored >= 0, self.ignored
+        assert self.tailignored >= 0, self.tailignored
+        assert self.size >= 0, self.size
+        assert (not self.__data) or (self.__data[0]), ("First element is required to be non-empty.", self.__data and self.__data[0])
+        assert (not self.__data) or (self.ignored < len(self.__data[0])), (self.ignored, self.__data and len(self.__data[0]))
+        assert (not self.__data) or (self.tailignored < len(self.__data[-1])), (self.tailignored, self.__data and len(self.__data[-1]))
+        assert self.ignored+self.size+self.tailignored == sum([len(x) for x in self.__data]), (self.ignored, self.size, self.tailignored, sum([len(x) for x in self.__data]))
+        return True
+
+    def _collapse(self):
+        """ Concatenate all of the strings into one string and make that string
+    be the only element of the chain. (Obviously this requires copying all
+    of the bytes, so don't do this unless you need to.) """
+
+        #assert self._assert_invariants()
+
+        # First trim off any leading ignored bytes.
+        if self.ignored:
+            self.__data[0] = self.__data[0][self.ignored:]
+            self.ignored = 0
+
+        # Then any tail ignored bytes.
+        if self.tailignored:
+            self.__data[-1] = self.__data[-1][:-self.tailignored]
+            self.tailignored = 0
+
+        if 1 < len(self.__data):
+            newbuf = b''.join(self.__data)
+            self.__data.clear()
+            self.__data.append(newbuf)
+
+        #assert self._assert_invariants()
+
+
+#Banana.debugSend    = True
+#Banana.debugReceive = True

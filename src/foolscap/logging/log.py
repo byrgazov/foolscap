@@ -34,17 +34,16 @@ _unused = [NOISY, OPERATIONAL, UNUSUAL, INFREQUENT, CURIOUS, WEIRD, SCARY, BAD]
 def format_message(e):
     try:
         if "format" in e:
-            assert isinstance(e['format'], (str,unicode))
+            assert type(e['format']) is str
             return e['format'] % e
         elif "args" in e:
             assert "message" in e
-            assert isinstance(e['message'], (str,unicode))
+            assert type(e['message']) is str
             return e['message'] % e['args']
         elif "message" in e:
-            assert isinstance(e['message'], (str,unicode))
+            assert type(e['message']) is str
             return e['message']
-        else:
-            return ""
+        return ""
     except (ValueError, TypeError):
         return e.get('message', "[no message]") + " [formatting failed]"
 
@@ -66,7 +65,7 @@ class Count:
 
     def next(self):
         return self.__next__()
-    
+
     def __next__(self):
         self.n += 1
         return self.n
@@ -103,6 +102,7 @@ class FoolscapLogger:
 
     def addObserver(self, observer):
         self._observers.append(observer)
+
     def removeObserver(self, observer):
         self._observers.remove(observer)
 
@@ -111,9 +111,9 @@ class FoolscapLogger:
         # an exception, nor will it recurse or cause more log messages to be
         # emitted. Immediate Observers are notified without an eventual-send.
         self._immediate_observers.append(observer)
+
     def removeImmediateObserver(self, observer):
         self._immediate_observers.remove(observer)
-
 
     def setLogDir(self, directory):
         # TODO: change self.incarnation to reflect next seqnum
@@ -370,7 +370,7 @@ class TwistedLogBridge:
             # level.
             log_level = d.pop("log_level")
             new_log_level = llmap.get(log_level, log_level)
-            if not isinstance(new_log_level, (int, long, str, unicode, bool)):
+            if not isinstance(new_log_level, (int, str, bool)):
                 # it was something weird: just stringify it in-place
                 new_log_level = str(new_log_level)
             kwargs["level"] = new_log_level # foolscap level, not twisted
@@ -441,7 +441,10 @@ def bridgeLogsToTwisted(filter=None,
                 "num": event["num"],
                 "level": event["level"],
                 }
-        twisted_logger.msg(format_message(event), **args)
+        if event.get('isError'):
+            twisted_logger.err(event.get('failure'), format_message(event), **args)
+        else:
+            twisted_logger.msg(format_message(event), **args)
     foolscap_logger.addObserver(_to_twisted)
 
 class LogFileObserver:
@@ -452,7 +455,7 @@ class LogFileObserver:
         else:
             self._logFile = open(filename, "wb")
         self._level = level
-        self._logFile.write(flogfile.MAGIC)
+        self._logFile.write(flogfile.MAGIC.encode('utf8', 'replace'))
         flogfile.serialize_header(self._logFile,
                                   "log-file-observer",
                                   versions=app_versions.versions,
@@ -497,11 +500,13 @@ if "FLOGTWISTED" in os.environ:
     bridgeLogsFromTwisted()
 
 if "FLOGTOTWISTED" in os.environ:
-    _floglevel = int(os.environ.get("FLOGLEVEL", str(OPERATIONAL)))
+    _flog2tx_full = os.environ['FLOGTOTWISTED'].lower() == 'full'
+    _floglevel = int(os.environ.get("FLOGLEVEL", str(0 if _flog2tx_full else OPERATIONAL)))
     def non_foolscap_FLOGLEVEL_or_better(e):
-        if e.get("facility","").startswith("foolscap"):
-            return False
-        if e['level'] < _floglevel:
-            return False
+        if not _flog2tx_full:
+            if e.get("facility","").startswith("foolscap"):
+                return False
+            if e['level'] < _floglevel:
+                return False
         return True
     bridgeLogsToTwisted(filter=non_foolscap_FLOGLEVEL_or_better)

@@ -33,26 +33,30 @@ class ExtendedEncoder(json.JSONEncoder):
 
 
 def serialize_raw_header(f, header):
-    json.dump({"header": header}, f, cls=ExtendedEncoder)
-    f.write("\n")
+    header = json.dumps({"header": header}, cls=ExtendedEncoder)
+    f.write(header.encode('utf8', 'replace'))
+    f.write(b"\n")
 
 def serialize_header(f, type, **kwargs):
     header = {"header": {"type": type} }
     for k,v in kwargs.items():
         header["header"][k] = v
-    json.dump(header, f, cls=ExtendedEncoder)
-    f.write("\n")
+    header = json.dumps(header, cls=ExtendedEncoder)
+    f.write(header.encode('utf8', 'replace'))
+    f.write(b"\n")
 
 def serialize_raw_wrapper(f, wrapper):
-    json.dump(wrapper, f, cls=ExtendedEncoder)
-    f.write("\n")
+    wrapper = json.dumps(wrapper, cls=ExtendedEncoder)
+    f.write(wrapper.encode('utf8', 'replace'))
+    f.write(b"\n")
 
 def serialize_wrapper(f, ev, from_, rx_time):
     wrapper = {"from": from_,
                "rx_time": rx_time,
                "d": ev}
-    json.dump(wrapper, f, cls=ExtendedEncoder)
-    f.write("\n")
+    wrapper = json.dumps(wrapper, cls=ExtendedEncoder)
+    f.write(wrapper.encode('utf8', 'replace'))
+    f.write(b"\n")
 
 MAGIC = "# foolscap flogfile v1\n"
 class BadMagic(Exception):

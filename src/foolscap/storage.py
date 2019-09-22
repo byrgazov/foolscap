@@ -121,10 +121,16 @@ def setInstanceState(inst, state):
 class Dummy:
     def __repr__(self):
         return "<Dummy %s>" % self.__dict__
-    def __cmp__(self, other):
-        if not type(other) == type(self):
-            return -1
-        return cmp(self.__dict__, other.__dict__)
+
+    def __eq__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ == other.__dict__
+        return NotImplemented
+
+    def __lt__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ < other.__dict__
+        return NotImplemented
 
 UnsafeUnslicerRegistry = {}
 
