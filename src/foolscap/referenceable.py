@@ -15,7 +15,7 @@ from twisted.python import failure, log
 from foolscap import ipb, slicer, tokens, call
 BananaError = tokens.BananaError
 Violation = tokens.Violation
-from foolscap.constraint import IConstraint, ByteStringConstraint
+from foolscap.constraint import IConstraint, StringConstraint
 from foolscap.remoteinterface import getRemoteInterface, \
      getRemoteInterfaceByName, RemoteInterfaceConstraint
 from foolscap.schema import constraintMap
@@ -23,11 +23,15 @@ from foolscap.copyable import Copyable, RemoteCopy
 from foolscap.eventual import eventually, fireEventually
 from foolscap.furl import decode_furl
 
-@implementer(ipb.IReferenceable)
-class OnlyReferenceable(object):
 
+STUB = object()
+
+
+@implementer(ipb.IReferenceable)
+class OnlyReferenceable:
     def processUniqueID(self):
         return id(self)
+
 
 @implementer(ipb.IReferenceable, ipb.IRemotelyCallable)
 class Referenceable(OnlyReferenceable):
@@ -61,7 +65,8 @@ class Referenceable(OnlyReferenceable):
 
 constraintMap[Referenceable] = RemoteInterfaceConstraint(None)
 
-class ReferenceableTracker(object):
+
+class ReferenceableTracker:
     """I hold the data which tracks a local Referenceable that is in used by
     a remote Broker.
 
@@ -107,6 +112,7 @@ class ReferenceableTracker(object):
             return True
         return False
 
+
 # TODO: rather than subclassing Referenceable, ReferenceableSlicer should be
 # registered to use for anything which provides any RemoteInterface
 
@@ -114,26 +120,26 @@ class ReferenceableSlicer(slicer.BaseSlicer):
     """I handle pb.Referenceable objects (things with remotely invokable
     methods, which are copied by reference).
     """
-    opentype = ('my-reference',)
+    opentype = (b'my-reference',)
 
     def slice(self, streamable, protocol):
-        broker = self.requireBroker(protocol)
-        puid = ipb.IReferenceable(self.obj).processUniqueID()
+        broker  = self.requireBroker(protocol)
+        puid    = ipb.IReferenceable(self.obj).processUniqueID()
         tracker = broker.getTrackerForMyReference(puid, self.obj)
+
         if broker.remote_broker:
             # emit a my-reference sequence
-            yield 'my-reference'
+            yield b'my-reference'
             yield tracker.clid
+
             firstTime = tracker.send()
+
             if firstTime:
                 # this is the first time the Referenceable has crossed this
                 # wire. In addition to the clid, send the interface name (if
                 # any), and any URL this reference might be known by
                 iname = ipb.IRemotelyCallable(self.obj).getInterfaceName()
-                if iname:
-                    yield iname
-                else:
-                    yield ""
+                yield iname or ''
                 url = tracker.getURL()
                 if url:
                     yield url
@@ -148,7 +154,7 @@ class ReferenceableSlicer(slicer.BaseSlicer):
             # Referenceable that you want to include in the serialized data,
             # and take steps to make sure that later incarnations of this Tub
             # will do the same.
-            yield 'their-reference'
+            yield b'their-reference'
             yield 0 # giftID==0 tells the recipient to not try to ack it
             yield tracker.getURL()
 
@@ -158,26 +164,28 @@ registerAdapter(ReferenceableSlicer, Referenceable, ipb.ISlicer)
 class CallableSlicer(slicer.BaseSlicer):
     """Bound methods are serialized as my-reference sequences with negative
     clid values."""
-    opentype = ('my-reference',)
+    opentype = (b'my-reference',)
 
     def sliceBody(self, streamable, protocol):
         broker = self.requireBroker(protocol)
+
         # TODO: consider this requirement, maybe based upon a Tub flag
         # assert ipb.ISlicer(self.obj.im_self)
         # or maybe even isinstance(self.obj.im_self, Referenceable)
         puid = id(self.obj)
+
         tracker = broker.getTrackerForMyCall(puid, self.obj)
         yield tracker.clid
+
         firstTime = tracker.send()
+
         if firstTime:
             # this is the first time the Call has crossed this wire. In
             # addition to the clid, send the schema name and any URL this
             # reference might be known by
             schema = self.getSchema()
-            if schema:
-                yield schema
-            else:
-                yield ""
+            yield schema or ''
+
             url = tracker.getURL()
             if url:
                 yield url
@@ -204,58 +212,57 @@ class ReferenceUnslicer(slicer.BaseUnslicer):
     """I turn an incoming 'my-reference' sequence into a RemoteReference or a
     RemoteMethodReference."""
     state = 0
-    clid = None
-    interfaceName = None
-    url = None
-    inameConstraint = ByteStringConstraint() # TODO: only known RI names?
-    urlConstraint = ByteStringConstraint()
+    clid  = None
+    url   = None
+    interfaceName   = None
+    inameConstraint = StringConstraint()  # TODO: only known RI names?
+    urlConstraint   = StringConstraint()
 
     def checkToken(self, typebyte, size):
         if self.state == 0:
             if typebyte not in (tokens.INT, tokens.NEG):
-                raise BananaError("reference ID must be an INT or NEG")
+                raise BananaError('reference ID must be an INT or NEG')
+
         elif self.state == 1:
             self.inameConstraint.checkToken(typebyte, size)
+
         elif self.state == 2:
             self.urlConstraint.checkToken(typebyte, size)
+
         else:
-            raise Violation("too many parameters in my-reference")
+            raise Violation('too many parameters in my-reference')
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, defer.Deferred)
         assert ready_deferred is None
+
         if self.state == 0:
             self.clid = obj
-            self.state = 1
+
         elif self.state == 1:
-            # must be the interface name
-            self.interfaceName = obj
-            if obj == "":
-                self.interfaceName = None
-            self.state = 2
+            self.interfaceName = None if obj == '' else obj
+
         elif self.state == 2:
-            # URL
             self.url = obj
-            self.state = 3
+
         else:
-            raise BananaError("Too many my-reference parameters")
+            raise BananaError('Too many my-reference parameters')
+
+        self.state += 1
 
     def receiveClose(self):
         if self.clid is None:
-            raise BananaError("sequence ended too early")
-        tracker = self.broker.getTrackerForYourReference(self.clid,
-                                                         self.interfaceName,
-                                                         self.url)
+            raise BananaError('sequence ended too early')
+        tracker = self.broker.getTrackerForYourReference(self.clid, self.interfaceName, self.url)
         return tracker.getRef(), None
 
     def describe(self):
         if self.clid is None:
-            return "<ref-?>"
-        return "<ref-%s>" % self.clid
+            return '<ref-?>'
+        return '<ref-%s>' % self.clid
 
 
-
-class RemoteReferenceTracker(object):
+class RemoteReferenceTracker:
     """I hold the data necessary to locate (or create) a RemoteReference.
 
     @ivar url: the target Referenceable's global URL
@@ -292,14 +299,13 @@ class RemoteReferenceTracker(object):
             if expected_tubid != url_tubid:
                 raise BananaError("inbound reference claims bad tubid, %s vs %s"
                                   % (expected_tubid, url_tubid))
-        self.interfaceName = interfaceName
-        self.interface = getRemoteInterfaceByName(interfaceName)
+        self.interfaceName  = interfaceName
+        self.interface      = getRemoteInterfaceByName(interfaceName)
         self.received_count = 0
         self.ref = None
 
     def __repr__(self):
-        s = "<RemoteReferenceTracker(clid=%d,url=%s)>" % (self.clid, self.url)
-        return s
+        return "<RemoteReferenceTracker(clid=%d,url=%s)>" % (self.clid, self.url)
 
     def getURL(self):
         return self.url
@@ -338,14 +344,14 @@ class RemoteReferenceTracker(object):
 
 
 @implementer(ipb.IRemoteReference)
-class RemoteReferenceOnly(object):
-
+class RemoteReferenceOnly:
     def __init__(self, tracker):
         """@param tracker: the RemoteReferenceTracker which points to us"""
         self.tracker = tracker
 
     def getSturdyRef(self):
         return SturdyRef(self.tracker.getURL())
+
     def getRemoteTubID(self):
         rt = self.tracker.broker.remote_tubref
         assert rt
@@ -363,6 +369,7 @@ class RemoteReferenceOnly(object):
     def isConnected(self):
         """Return False if this reference is known to be dead."""
         return not self.tracker.broker.disconnected
+
     def getLocationHints(self):
         return SturdyRef(self.tracker.url).locationHints
     def getConnectionInfo(self):
@@ -399,6 +406,7 @@ class RemoteReferenceOnly(object):
         marker = self.tracker.broker.notifyOnDisconnect(callback,
                                                         *args, **kwargs)
         return marker
+
     def dontNotifyOnDisconnect(self, marker):
         self.tracker.broker.dontNotifyOnDisconnect(marker)
 
@@ -409,6 +417,7 @@ class RemoteReferenceOnly(object):
         r += ">"
         return r
 
+
 class RemoteReference(RemoteReferenceOnly):
     def callRemote(self, _name, *args, **kwargs):
         # Note: for consistency, *all* failures are reported asynchronously.
@@ -418,8 +427,7 @@ class RemoteReference(RemoteReferenceOnly):
         # the remote end will not send us a response. The only error cases
         # are arguments that don't match the schema, or broken invariants. In
         # particular, DeadReferenceError will be silently consumed.
-        d = defer.maybeDeferred(self._callRemote, _name, _callOnly=True,
-                                *args, **kwargs)
+        d = defer.maybeDeferred(self._callRemote, _name, _callOnly=True, *args, **kwargs)
         del d
         return None
 
@@ -427,14 +435,10 @@ class RemoteReference(RemoteReferenceOnly):
         req = None
         broker = self.tracker.broker
 
-        # remember that "none" is not a valid constraint, so we use it to
-        # mean "not set by the caller", which means we fall back to whatever
-        # the RemoteInterface says. Using None would mean an AnyConstraint,
-        # which is not the same thing.
-        methodConstraintOverride = kwargs.get("_methodConstraint", "none")
-        resultConstraint = kwargs.get("_resultConstraint", "none")
+        methodConstraintOverride = kwargs.get("_methodConstraint", STUB)
+        resultConstraint = kwargs.get("_resultConstraint", STUB)
         useSchema = kwargs.get("_useSchema", True)
-        callOnly = kwargs.get("_callOnly", False)
+        callOnly  = kwargs.get("_callOnly", False)
 
         if "_methodConstraint" in kwargs:
             del kwargs["_methodConstraint"]
@@ -472,7 +476,7 @@ class RemoteReference(RemoteReferenceOnly):
         req.interfaceName = interfaceName
         req.methodName = methodName
 
-        if methodConstraintOverride != "none":
+        if methodConstraintOverride is not STUB:
             methodSchema = methodConstraintOverride
 
         if useSchema and methodSchema:
@@ -481,8 +485,7 @@ class RemoteReference(RemoteReferenceOnly):
             try:
                 methodSchema.checkAllArgs(args, kwargs, False)
             except Violation as v:
-                v.setLocation("%s.%s(%s)" % (interfaceName, methodName,
-                                             v.getLocation()))
+                v.setLocation("%s.%s(%s)" % (interfaceName, methodName, v.getLocation()))
                 raise
 
             # the Interface gets to constraint the return value too, so
@@ -491,11 +494,11 @@ class RemoteReference(RemoteReferenceOnly):
 
         # if the caller specified a _resultConstraint, that overrides
         # the schema's one
-        if resultConstraint != "none":
+        if resultConstraint is not STUB:
             # overrides schema
             req.setConstraint(IConstraint(resultConstraint))
 
-        clid = self.tracker.clid
+        clid   = self.tracker.clid
         slicer = call.CallSlicer(reqID, clid, methodName, args, kwargs)
 
         # up to this point, we are not committed to sending anything to the
@@ -546,9 +549,22 @@ class RemoteReference(RemoteReferenceOnly):
             # do it).
 
             d.addErrback(req.fail)
-
-        except:
+        except Exception:
             req.fail(failure.Failure())
+
+        # @todo: (!?) timeout
+
+        """ [bw] debug
+        def cb(result, *args):
+            print('-cb-', args, '-->', result)
+            return result
+
+        print('--', reqID, interfaceName, methodName)
+        d.addBoth(cb, 'broker.send', slicer)
+        req.deferred.addBoth(cb, 'call.PendingRequest', reqID)
+        import twisted.internet.reactor as reactor
+        reactor.callLater(2.0, req.deferred.cancel)
+        """
 
         # the remote end could send back an error response for many reasons:
         #  bad method name
@@ -566,18 +582,20 @@ class RemoteReference(RemoteReferenceOnly):
 
     def _getMethodInfo(self, name):
         assert type(name) is str
+
         interfaceName = None
-        methodName = name
-        methodSchema = None
+        methodName    = name
+        methodSchema  = None
 
         iface = self.tracker.interface
+
         if iface:
             interfaceName = iface.__remote_name__
             try:
                 methodSchema = iface[name]
             except KeyError:
-                raise Violation("%s(%s) does not offer %s" % \
-                                (interfaceName, self, name))
+                raise Violation("%s(%s) does not offer %s" % (interfaceName, self, name))
+
         return interfaceName, methodName, methodSchema
 
 
@@ -588,6 +606,7 @@ class RemoteMethodReferenceTracker(RemoteReferenceTracker):
             self.ref = weakref.ref(ref, self._refLost)
         self.received_count += 1
         return self.ref()
+
 
 class RemoteMethodReference(RemoteReference):
     def callRemote(self, *args, **kwargs):
@@ -606,8 +625,9 @@ class RemoteMethodReference(RemoteReference):
         methodSchema = None
         return interfaceName, methodName, methodSchema
 
+
 @implementer(ipb.IRemoteReference)
-class LocalReferenceable(object):
+class LocalReferenceable:
 
     def __init__(self, original):
         self.original = original
@@ -634,7 +654,6 @@ class LocalReferenceable(object):
 registerAdapter(LocalReferenceable, ipb.IReferenceable, ipb.IRemoteReference)
 
 
-
 class YourReferenceSlicer(slicer.BaseSlicer):
     """I handle pb.RemoteReference objects (being sent back home to the
     original pb.Referenceable-holder)
@@ -646,7 +665,7 @@ class YourReferenceSlicer(slicer.BaseSlicer):
         tracker = self.obj.tracker
         if tracker.broker == broker:
             # sending back to home broker
-            yield 'your-reference'
+            yield b'your-reference'
             yield tracker.clid
         else:
             # sending somewhere else
@@ -656,7 +675,7 @@ class YourReferenceSlicer(slicer.BaseSlicer):
                 furl = ""
             assert isinstance(furl, str)
             giftID = broker.makeGift(self.obj)
-            yield 'their-reference'
+            yield b'their-reference'
             yield giftID
             yield furl
 
@@ -664,6 +683,7 @@ class YourReferenceSlicer(slicer.BaseSlicer):
         return "<your-ref-%s>" % self.obj.tracker.clid
 
 registerAdapter(YourReferenceSlicer, RemoteReference, ipb.ISlicer)
+
 
 class YourReferenceUnslicer(slicer.LeafUnslicer):
     """I accept incoming (integer) your-reference sequences and try to turn
@@ -700,7 +720,7 @@ class TheirReferenceUnslicer(slicer.LeafUnslicer):
     state = 0
     giftID = None
     url = None
-    urlConstraint = ByteStringConstraint()
+    urlConstraint = StringConstraint()
 
     def checkToken(self, typebyte, size):
         if self.state == 0:

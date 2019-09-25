@@ -1,7 +1,6 @@
 # -*- test-case-name: foolscap.test.test_banana -*-
 
 from __future__ import print_function
-from six import with_metaclass 
 from twisted.python.components import registerAdapter
 from twisted.python import log
 from zope.interface import implementer
@@ -21,8 +20,7 @@ class SlicerClass(type):
 
 
 @implementer(tokens.ISlicer)
-class BaseSlicer(with_metaclass(SlicerClass, object)):
-
+class BaseSlicer(metaclass=SlicerClass):
     slices = None
 
     parent = None
@@ -34,6 +32,9 @@ class BaseSlicer(with_metaclass(SlicerClass, object)):
         # this simplifies Slicers which are adapters
         self.obj = obj
 
+    def __repr__(self):
+        return self.describe()
+
     def requireBroker(self, protocol):
         broker = IBroker(protocol, None)
         if not broker:
@@ -44,9 +45,11 @@ class BaseSlicer(with_metaclass(SlicerClass, object)):
     def registerRefID(self, refid, obj):
         # optimize: most Slicers will delegate this up to the Root
         return self.parent.registerRefID(refid, obj)
+
     def slicerForObject(self, obj):
         # optimize: most Slicers will delegate this up to the Root
         return self.parent.slicerForObject(obj)
+
     def slice(self, streamable, banana):
         # this is what makes us ISlicer
         self.streamable = streamable
@@ -55,8 +58,10 @@ class BaseSlicer(with_metaclass(SlicerClass, object)):
             yield o
         for t in self.sliceBody(streamable, banana):
             yield t
+
     def sliceBody(self, streamable, banana):
         raise NotImplementedError
+
     def childAborted(self, f):
         return f
 
@@ -126,14 +131,17 @@ class ScopedSlicer(BaseSlicer):
         # otherwise go upstream so we can serialize the object completely
         return self.parent.slicerForObject(obj)
 
+
 UnslicerRegistry = {}
 BananaUnslicerRegistry = {}
+
 
 def registerUnslicer(opentype, factory, registry=None):
     if registry is None:
         registry = UnslicerRegistry
     assert opentype not in registry
     registry[opentype] = factory
+
 
 class UnslicerClass(type):
     # auto-register Unslicers
@@ -143,13 +151,17 @@ class UnslicerClass(type):
         reg = dict.get('unslicerRegistry')
         if opentype:
             registerUnslicer(opentype, self, reg)
-            
+
+
 @implementer(tokens.IUnslicer)
-class BaseUnslicer(with_metaclass(UnslicerClass, object)):
+class BaseUnslicer(metaclass=UnslicerClass):
     opentype = None
 
     def __init__(self):
         pass
+
+    def __repr__(self):
+        return self.describe()
 
     def describe(self):
         return "??"
@@ -203,7 +215,6 @@ class BaseUnslicer(with_metaclass(UnslicerClass, object)):
         happens, and return the AsyncAND as the ready_deferreds half of the
         receiveClose() return value.
         """
-        pass
 
     def reportViolation(self, why):
         return why
@@ -250,6 +261,7 @@ class BaseUnslicer(with_metaclass(UnslicerClass, object)):
         log.msg("BaseUnslicer.explode: %s" % failure)
         self.protocol.exploded = failure
 
+
 class ScopedUnslicer(BaseUnslicer):
     """This Unslicer provides a containing scope for referenceable things
     like lists. It corresponds to the ScopedSlicer base class."""
@@ -283,7 +295,7 @@ class LeafUnslicer(BaseUnslicer):
 
 class ReferenceSlicer(BaseSlicer):
     # this is created explicitly, not as an adapter
-    opentype = ('reference',)
+    opentype = (b'reference',)
     trackReferences = False
 
     def __init__(self, refid):
@@ -292,8 +304,9 @@ class ReferenceSlicer(BaseSlicer):
     def sliceBody(self, streamable, banana):
         yield self.refid
 
+
 class ReferenceUnslicer(LeafUnslicer):
-    opentype = ('reference',)
+    opentype = (b'reference',)
 
     constraint = None
     finished = False

@@ -2,7 +2,10 @@
 
 # this module is responsible for all copy-by-value objects
 
+import itertools as I
+
 from zope.interface import interface, implementer
+
 from twisted.python import reflect, log
 from twisted.python.components import registerAdapter
 from twisted.internet import defer
@@ -15,6 +18,7 @@ Interface = interface.Interface
 
 ############################################################
 # the first half of this file is sending/serialization
+
 
 class ICopyable(Interface):
     """I represent an object which is passed-by-value across PB connections.
@@ -29,8 +33,9 @@ class ICopyable(Interface):
         serialized and sent to the remote end. This state object will be
         given to the receiving object's setCopyableState method."""
 
+
 @implementer(ICopyable)
-class Copyable(object):
+class Copyable:
     # you *must* set 'typeToCopy'
 
     def getTypeToCopy(self):
@@ -39,23 +44,27 @@ class Copyable(object):
         except AttributeError:
             raise RuntimeError("Copyable subclasses must specify 'typeToCopy'")
         return copytype
+
     def getStateToCopy(self):
         return self.__dict__
+
 
 class CopyableSlicer(slicer.BaseSlicer):
     """I handle ICopyable objects (things which are copied by value)."""
     def slice(self, streamable, banana):
         self.streamable = streamable
-        yield 'copyable'
+        yield b'copyable'
         copytype = self.obj.getTypeToCopy()
         assert isinstance(copytype, str)
         yield copytype
         state = self.obj.getStateToCopy()
-        for k,v in state.items():
+        for k, v in state.items():
             yield k
             yield v
+
     def describe(self):
         return "<%s>" % self.obj.getTypeToCopy()
+
 registerAdapter(CopyableSlicer, ICopyable, tokens.ISlicer)
 
 
@@ -63,17 +72,22 @@ class Copyable2(slicer.BaseSlicer):
     # I am my own Slicer. This has more methods than you'd usually want in a
     # base class, but if you can't register an Adapter for a whole class
     # hierarchy then you may have to use it.
+
     def getTypeToCopy(self):
         return reflect.qual(self.__class__)
+
     def getStateToCopy(self):
         return self.__dict__
+
     def slice(self, streamable, banana):
         self.streamable = streamable
-        yield 'instance'
+        yield b'instance'
         yield self.getTypeToCopy()
         yield self.getStateToCopy()
+
     def describe(self):
         return "<%s>" % self.getTypeToCopy()
+
 
 #registerRemoteCopy(typename, factory)
 #registerUnslicer(typename, factory)
@@ -87,22 +101,26 @@ def registerCopier(klass, copier):
     klassname = reflect.qual(klass)
     @implementer(ICopyable)
     class _CopierAdapter:
-
         def __init__(self, original):
             self.nameToCopy, self.state = copier(original)
             if self.nameToCopy is None:
                 self.nameToCopy = klassname
+
         def getTypeToCopy(self):
             return self.nameToCopy
+
         def getStateToCopy(self):
             return self.state
+
     registerAdapter(_CopierAdapter, klass, ICopyable)
+
 
 ############################################################
 # beyond here is the receiving/deserialization side
 
 class RemoteCopyUnslicer(slicer.BaseUnslicer):
-    attrname = None
+    classname = None
+    attrname  = None
     attrConstraint = None
 
     def __init__(self, factory, stateSchema):
@@ -116,26 +134,30 @@ class RemoteCopyUnslicer(slicer.BaseUnslicer):
         self.protocol.setObject(count, self.deferred)
 
     def checkToken(self, typebyte, size):
-        if self.attrname == None:
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
+        if self.attrname is None:
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
                 raise BananaError("RemoteCopyUnslicer keys must be STRINGs")
-        else:
-            if self.attrConstraint:
-                self.attrConstraint.checkToken(typebyte, size)
+
+        elif self.attrConstraint:
+            self.attrConstraint.checkToken(typebyte, size)
 
     def doOpen(self, opentype):
         if self.attrConstraint:
             self.attrConstraint.checkOpentype(opentype)
+
         unslicer = self.open(opentype)
+
         if unslicer:
             if self.attrConstraint:
                 unslicer.setConstraint(self.attrConstraint)
+
         return unslicer
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, defer.Deferred)
         assert ready_deferred is None
-        if self.attrname == None:
+
+        if self.attrname is None:
             attrname = obj
             if attrname in self.d:
                 raise BananaError("duplicate attribute name '%s'" % attrname)
@@ -170,13 +192,15 @@ class RemoteCopyUnslicer(slicer.BaseUnslicer):
         return obj, None
 
     def describe(self):
-        if self.classname == None:
+        if self.classname is None:
             return "<??>"
+
         me = "<%s>" % self.classname
+
         if self.attrname is None:
             return "%s.attrname??" % me
-        else:
-            return "%s.%s" % (me, self.attrname)
+
+        return "%s.%s" % (me, self.attrname)
 
 
 class NonCyclicRemoteCopyUnslicer(RemoteCopyUnslicer):
@@ -232,8 +256,7 @@ class IRemoteCopy(Interface):
 
 # This maps typename to an Unslicer factory
 CopyableRegistry = {}
-def registerRemoteCopyUnslicerFactory(typename, unslicerfactory,
-                                      registry=None):
+def registerRemoteCopyUnslicerFactory(typename, unslicerfactory, registry=None):
     """Tell PB that unslicerfactory can be used to handle Copyable objects
     that provide a getTypeToCopy name of 'typename'. 'unslicerfactory' must
     be a callable which takes no arguments and returns an object which
@@ -246,10 +269,11 @@ def registerRemoteCopyUnslicerFactory(typename, unslicerfactory,
     assert tokens.IUnslicer.providedBy(test_unslicer)
     assert type(typename) is str
 
-    if registry == None:
+    if registry is None:
         registry = CopyableRegistry
     assert typename not in registry
     registry[typename] = unslicerfactory
+
 
 # this keeps track of everything submitted to registerRemoteCopyFactory
 debug_CopyableFactories = {}
@@ -278,6 +302,7 @@ def registerRemoteCopyFactory(typename, factory, stateSchema=None,
         registerRemoteCopyUnslicerFactory(typename,
                                           _RemoteCopyUnslicerFactoryNonCyclic,
                                           registry)
+
 
 # this keeps track of everything submitted to registerRemoteCopy, which may
 # be useful when you're wondering what's been auto-registered by the
@@ -323,10 +348,9 @@ class RemoteCopyClass(type):
             registry = dict.get('copyableRegistry', None)
             registerRemoteCopy(copytype, self, registry)
 
+
 @implementer(IRemoteCopy)
 class _RemoteCopyBase:
-
-
     stateSchema = None # always a class attribute
     nonCyclic = False
 
@@ -337,10 +361,12 @@ class _RemoteCopyBase:
     def setCopyableState(self, state):
         self.__dict__ = state
 
+
 class RemoteCopyOldStyle(_RemoteCopyBase):
     # note that these will not auto-register for you, because old-style
     # classes do not do metaclass magic
     copytype = None
+
 
 class RemoteCopy(_RemoteCopyBase, object):
     # Set 'copytype' to a unique string that is shared between the
@@ -360,35 +386,38 @@ class AttributeDictConstraint(OpenerConstraint):
 
     Some special constraints are legal here: Optional.
     """
-    opentypes = [("attrdict",)]
+    opentypes = [(b"attrdict",)]
     name = "AttributeDictConstraint"
 
     def __init__(self, *attrTuples, **kwargs):
         self.ignoreUnknown = kwargs.get('ignoreUnknown', False)
         self.acceptUnknown = kwargs.get('acceptUnknown', False)
         self.keys = {}
-        for name, constraint in (list(attrTuples) +
-                                 list(kwargs.get('attributes', {}).items())):
+
+        for name, constraint in I.chain(attrTuples, kwargs.get('attributes', {}).items()):
             assert name not in self.keys.keys()
             self.keys[name] = IConstraint(constraint)
 
     def getAttrConstraint(self, attrname):
         c = self.keys.get(attrname)
+
         if c:
             if isinstance(c, Optional):
                 c = c.constraint
             return (True, c)
+
         # unknown attribute
         if self.ignoreUnknown:
             return (False, None)
+
         if self.acceptUnknown:
             return (True, None)
+
         raise Violation("unknown attribute '%s'" % attrname)
 
     def checkObject(self, obj, inbound):
         if type(obj) != type({}):
-            raise Violation("'%s' (%s) is not a Dictionary" % (obj,
-                                                               type(obj)))
+            raise Violation("'%s' (%s) is not a Dictionary" % (obj, type(obj)))
         allkeys = list(self.keys.keys())
         for k in obj.keys():
             try:

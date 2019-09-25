@@ -6,37 +6,47 @@
 # This imports foolscap.tokens, but no other Foolscap modules.
 
 import re
+
 from zope.interface import implementer, Interface
-from past.builtins import long
-from foolscap.tokens import Violation, BananaError, SIZE_LIMIT, \
-     STRING, LIST, INT, NEG, LONGINT, LONGNEG, VOCAB, FLOAT, OPEN, \
-     tokenNames
+
+from .tokens import Violation, BananaError, tokenNames, SIZE_LIMIT
+from .tokens import STRING, BYTES, LIST, INT, NEG, SVOCAB, BVOCAB, FLOAT, OPEN
+
+
+STUB = object()
+
 
 everythingTaster = {
     # he likes everything
     STRING: None,
-    LIST: None,
-    INT: None,
-    NEG: None,
-    LONGINT: SIZE_LIMIT, # this limits numbers to about 2**8000, probably ok
-    LONGNEG: SIZE_LIMIT,
-    VOCAB: None,
-    FLOAT: None,
-    OPEN: None,
-    }
+    BYTES : None,
+    LIST  : None,
+    INT   : None,
+    NEG   : None,
+    SVOCAB: None,
+    BVOCAB: None,
+    FLOAT : None,
+    OPEN  : None,
+}
+
 openTaster = {
     OPEN: None,
-    }
+}
+
 nothingTaster = {}
+
 
 class IConstraint(Interface):
     pass
+
+
 class IRemoteMethodConstraint(IConstraint):
     def getPositionalArgConstraint(argnum):
         """Return the constraint for posargs[argnum]. This is called on
         inbound methods when receiving positional arguments. This returns a
         tuple of (accept, constraint), where accept=False means the argument
         should be rejected immediately, regardless of what type it might be."""
+
     def getKeywordArgConstraint(argname, num_posargs=0, previous_kwargs=[]):
         """Return the constraint for kwargs[argname]. The other arguments are
         used to handle mixed positional and keyword arguments. Returns a
@@ -50,12 +60,13 @@ class IRemoteMethodConstraint(IConstraint):
         method constraint) is located.
 
         This should either raise Violation or return None."""
-        pass
+
     def getResponseConstraint():
         """Return an IConstraint-providing object to enforce the response
         constraint. This is called on outbound method calls so that when the
         response starts to come back, we can start enforcing the appropriate
         constraint right away."""
+
     def checkResults(results, inbound):
         """Inspect the results of invoking a method call. inbound=False is
         used on the side that hosts the Referenceable, just after the target
@@ -65,14 +76,14 @@ class IRemoteMethodConstraint(IConstraint):
 
         This should either raise Violation or return None."""
 
+
 @implementer(IConstraint)
-class Constraint(object):
+class Constraint:
     """
     Each __schema__ attribute is turned into an instance of this class, and
     is eventually given to the unserializer (the 'Unslicer') to enforce as
     the tokens are arriving off the wire.
     """
-
 
     taster = everythingTaster
     """the Taster is a dict that specifies which basic token types are
@@ -99,25 +110,19 @@ class Constraint(object):
         """Check the token type. Raise an exception if it is not accepted
         right now, or if the body-length limit is exceeded."""
 
-        limit = self.taster.get(typebyte, "not in list")
-        if limit == "not in list":
+        limit = self.taster.get(typebyte, STUB)
+
+        if limit is STUB:
             if self.strictTaster:
-                raise BananaError("invalid token type: %s" %
-                                  tokenNames[typebyte])
-            else:
-                raise Violation("%s token rejected by %s" %
-                                (tokenNames[typebyte], self.name))
-        if limit and size > limit:
-            raise Violation("%s token too large: %d>%d" %
-                            (tokenNames[typebyte], size, limit))
+                raise BananaError("invalid token type: %s" % tokenNames[typebyte])
+            raise Violation("%s token rejected by %s" % (tokenNames[typebyte], self.name))
+
+        if limit is not None and limit < size:
+            raise Violation("%s token too large: %d>%d" % (tokenNames[typebyte], size, limit))
 
     def setNumberTaster(self, maxValue):
-        self.taster = {INT: None,
-                       NEG: None,
-                       LONGINT: None, # TODO
-                       LONGNEG: None,
-                       FLOAT: None,
-                       }
+        self.taster = {INT: None, NEG: None, FLOAT: None}
+
     def checkOpentype(self, opentype):
         """Check the OPEN type (the tuple of Index Tokens). Raise an
         exception if it is not accepted.
@@ -135,7 +140,7 @@ class Constraint(object):
         # type.
 
         #if opentype == ReferenceSlicer.opentype:
-        if opentype == ('reference',):
+        if opentype == (b'reference',):
             return
 
         for o in self.opentypes:
@@ -191,42 +196,83 @@ class Constraint(object):
         # for a total of 65+1065+65 = 1195
         return self.COUNTERBYTES+1 + 64+1+1000 + self.COUNTERBYTES+1
 
+
 class OpenerConstraint(Constraint):
     taster = openTaster
 
+
 class Any(Constraint):
     pass # accept everything
+
 
 # constraints which describe individual banana tokens
 
 class ByteStringConstraint(Constraint):
     opentypes = [] # redundant, as taster doesn't accept OPEN
-    name = "ByteStringConstraint"
+    name   = "ByteStringConstraint"
+    regexp = None
 
     def __init__(self, maxLength=None, minLength=0, regexp=None):
         self.maxLength = maxLength
         self.minLength = minLength
-        # regexp can either be a string or a compiled SRE_Match object..
-        # re.compile appears to notice SRE_Match objects and pass them
-        # through unchanged.
-        self.regexp = None
+
         if regexp:
             self.regexp = re.compile(regexp)
-        self.taster = {STRING: self.maxLength,
-                       VOCAB: None}
+
+        self.taster = {BYTES: self.maxLength, BVOCAB: None}
 
     def checkObject(self, obj, inbound):
         if not isinstance(obj, bytes):
-            raise Violation("'%r' is not a bytestring" % (obj,))
-        if self.maxLength != None and len(obj) > self.maxLength:
-            raise Violation("string too long (%d > %d)" %
-                            (len(obj), self.maxLength))
+            raise Violation("%r is not a bytes" % (obj,))
+
+        if self.maxLength is not None and len(obj) > self.maxLength:
+            raise Violation("bytes too long (%d > %d)" % (len(obj), self.maxLength))
+
         if len(obj) < self.minLength:
-            raise Violation("string too short (%d < %d)" %
-                            (len(obj), self.minLength))
-        if self.regexp:
-            if not self.regexp.search(obj):
-                raise Violation("regexp failed to match")
+            raise Violation("bytes too short (%d < %d)" % (len(obj), self.minLength))
+
+        if self.regexp and not self.regexp.search(obj):
+            raise Violation("regexp failed to match")
+
+
+class StringConstraint(Constraint):
+    """The object must be a unicode object. The maxLength and minLength
+    parameters restrict the number of characters (code points, *not* bytes)
+    that may be present in the object, which means that the on-wire (UTF-8)
+    representation may take up to 6 times as many bytes as characters.
+    """
+
+# [bw] strictTaster = True
+    opentypes = [] # redundant, as taster doesn't accept OPEN
+    name   = "StringConstraint"
+    regexp = None
+
+    def __init__(self, maxLength=None, minLength=0, regexp=None):
+        self.maxLength = maxLength
+        self.minLength = minLength
+
+        if regexp:
+            self.regexp = re.compile(regexp)
+
+        self.taster = {
+            # @xxx: expected UTF-8 encoded string
+            STRING: self.maxLength * 4 if self.maxLength is not None else None,
+            SVOCAB: None,
+        }
+
+    def checkObject(self, obj, inbound):
+        if not isinstance(obj, str):
+            raise Violation("%r is not a str" % (obj,))
+
+        if self.maxLength != None and len(obj) > self.maxLength:
+            raise Violation("string too long (%d > %d)" % (len(obj), self.maxLength))
+
+        if len(obj) < self.minLength:
+            raise Violation("string too short (%d < %d)" % (len(obj), self.minLength))
+
+        if self.regexp and not self.regexp.search(obj):
+            raise Violation("regexp failed to match")
+
 
 class IntegerConstraint(Constraint):
     opentypes = [] # redundant
@@ -239,19 +285,17 @@ class IntegerConstraint(Constraint):
         assert maxBytes == -1 or maxBytes == None or maxBytes >= 4
         self.maxBytes = maxBytes
         self.taster = {INT: None, NEG: None}
-        if maxBytes != -1:
-            self.taster[LONGINT] = maxBytes
-            self.taster[LONGNEG] = maxBytes
 
     def checkObject(self, obj, inbound):
-        if not isinstance(obj, (int, long)):
+        if not isinstance(obj, int):
             raise Violation("'%r' is not a number" % (obj,))
         if self.maxBytes == -1:
             if obj >= 2**31 or obj < -2**31:
                 raise Violation("number too large")
-        elif self.maxBytes != None:
+        elif self.maxBytes is not None:
             if abs(obj) >= 2**(8*self.maxBytes):
                 raise Violation("number too large")
+
 
 class NumberConstraint(IntegerConstraint):
     """I accept floats, ints, and longs."""
@@ -268,7 +312,6 @@ class NumberConstraint(IntegerConstraint):
         IntegerConstraint.checkObject(self, obj, inbound)
 
 
-
 #TODO
 class Shared(Constraint):
     name = "Shared"
@@ -276,6 +319,7 @@ class Shared(Constraint):
     def __init__(self, constraint, refLimit=None):
         self.constraint = IConstraint(constraint)
         self.refLimit = refLimit
+
 
 #TODO: might be better implemented with a .optional flag
 class Optional(Constraint):

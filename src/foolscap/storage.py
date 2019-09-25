@@ -45,7 +45,7 @@ def getInstanceState(inst):
     return state
 
 class InstanceSlicer(OrderedDictSlicer):
-    opentype = ('instance',)
+    opentype = (b'instance',)
     trackReferences = True
 
     def sliceBody(self, streamable, banana):
@@ -55,21 +55,21 @@ class InstanceSlicer(OrderedDictSlicer):
             yield t
 
 class ModuleSlicer(slicer.BaseSlicer):
-    opentype = ('module',)
+    opentype = (b'module',)
     trackReferences = True
 
     def sliceBody(self, streamable, banana):
         yield self.obj.__name__
 
 class ClassSlicer(slicer.BaseSlicer):
-    opentype = ('class',)
+    opentype = (b'class',)
     trackReferences = True
 
     def sliceBody(self, streamable, banana):
         yield reflect.qual(self.obj)
 
 class MethodSlicer(slicer.BaseSlicer):
-    opentype = ('method',)
+    opentype = (b'method',)
     trackReferences = True
 
     def sliceBody(self, streamable, banana):
@@ -78,7 +78,7 @@ class MethodSlicer(slicer.BaseSlicer):
         yield self.obj.im_class
 
 class FunctionSlicer(slicer.BaseSlicer):
-    opentype = ('function',)
+    opentype = (b'function',)
     trackReferences = True
 
     def sliceBody(self, streamable, banana):
@@ -138,7 +138,7 @@ class InstanceUnslicer(slicer.BaseUnslicer):
     # this is an unsafe unslicer: an attacker could induce you to create
     # instances of arbitrary classes with arbitrary attributes: VERY
     # DANGEROUS!
-    opentype = ('instance',)
+    opentype = (b'instance',)
     unslicerRegistry = UnsafeUnslicerRegistry
 
     # danger: instances are mutable containers. If an attribute value is not
@@ -159,10 +159,11 @@ class InstanceUnslicer(slicer.BaseUnslicer):
 
     def checkToken(self, typebyte, size):
         if self.classname is None:
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
-                raise BananaError("InstanceUnslicer classname must be string")
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
+                raise BananaError("InstanceUnslicer classname must be STRING")
+
         elif self.attrname is None:
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
                 raise BananaError("InstanceUnslicer keys must be STRINGs")
 
     def receiveChild(self, obj, ready_deferred=None):
@@ -212,14 +213,14 @@ class InstanceUnslicer(slicer.BaseUnslicer):
             return "%s.%s" % (me, self.attrname)
 
 class ModuleUnslicer(slicer.LeafUnslicer):
-    opentype = ('module',)
+    opentype = (b'module',)
     unslicerRegistry = UnsafeUnslicerRegistry
 
     finished = False
 
     def checkToken(self, typebyte, size):
-        if typebyte not in (tokens.STRING, tokens.VOCAB):
-            raise BananaError("ModuleUnslicer only accepts strings")
+        if typebyte not in (tokens.STRING, tokens.SVOCAB):
+            raise BananaError("ModuleUnslicer only accepts STRINGs")
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, Deferred)
@@ -237,14 +238,14 @@ class ModuleUnslicer(slicer.LeafUnslicer):
         return self.mod, None
 
 class ClassUnslicer(slicer.LeafUnslicer):
-    opentype = ('class',)
+    opentype = (b'class',)
     unslicerRegistry = UnsafeUnslicerRegistry
 
     finished = False
 
     def checkToken(self, typebyte, size):
-        if typebyte not in (tokens.STRING, tokens.VOCAB):
-            raise BananaError("ClassUnslicer only accepts strings")
+        if typebyte not in (tokens.STRING, tokens.SVOCAB):
+            raise BananaError("ClassUnslicer only accepts STRINGs")
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, Deferred)
@@ -261,7 +262,7 @@ class ClassUnslicer(slicer.LeafUnslicer):
         return self.klass, None
 
 class MethodUnslicer(slicer.BaseUnslicer):
-    opentype = ('method',)
+    opentype = (b'method',)
     unslicerRegistry = UnsafeUnslicerRegistry
 
     state = 0
@@ -276,11 +277,13 @@ class MethodUnslicer(slicer.BaseUnslicer):
 
     def checkToken(self, typebyte, size):
         if self.state == 0:
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
-                raise BananaError("MethodUnslicer methodname must be a string")
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
+                raise BananaError("MethodUnslicer methodname must be a STRING")
+
         elif self.state == 1:
             if typebyte != tokens.OPEN:
                 raise BananaError("MethodUnslicer instance must be OPEN")
+
         elif self.state == 2:
             if typebyte != tokens.OPEN:
                 raise BananaError("MethodUnslicer class must be an OPEN")
@@ -288,11 +291,10 @@ class MethodUnslicer(slicer.BaseUnslicer):
     def doOpen(self, opentype):
         # check the opentype
         if self.state == 1:
-            if opentype[0] not in ("instance", "none"):
-                raise BananaError("MethodUnslicer instance must be " +
-                                  "instance or None")
+            if opentype[0] not in (b"instance", b"none"):
+                raise BananaError("MethodUnslicer instance must be instance or None")
         elif self.state == 2:
-            if opentype[0] != "class":
+            if opentype[0] != b"class":
                 raise BananaError("MethodUnslicer class must be a class")
         unslicer = self.open(opentype)
         # TODO: apply constraint
@@ -333,20 +335,22 @@ class MethodUnslicer(slicer.BaseUnslicer):
 
 
 class FunctionUnslicer(slicer.LeafUnslicer):
-    opentype = ('function',)
+    opentype = (b'function',)
     unslicerRegistry = UnsafeUnslicerRegistry
 
     finished = False
 
     def checkToken(self, typebyte, size):
-        if typebyte not in (tokens.STRING, tokens.VOCAB):
-            raise BananaError("FunctionUnslicer only accepts strings")
+        if typebyte not in (tokens.STRING, tokens.SVOCAB):
+            raise BananaError("FunctionUnslicer only accepts STRINGs")
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, Deferred)
         assert ready_deferred is None
+
         if self.finished:
             raise BananaError("FunctionUnslicer only accepts one string")
+
         self.finished = True
         # TODO: taste here!
         self.func = reflect.namedObject(obj)
@@ -355,6 +359,7 @@ class FunctionUnslicer(slicer.LeafUnslicer):
         if not self.finished:
             raise BananaError("FunctionUnslicer requires a string")
         return self.func, None
+
 
 # the root unslicer for storage is just like the regular one, but hands
 # received objects to the StorageBanana
@@ -368,14 +373,12 @@ class UnsafeStorageRootUnslicer(StorageRootUnslicer):
     # This version tracks references for the entire lifetime of the
     # protocol. It is most appropriate for single-use purposes, such as a
     # replacement for Pickle.
-    topRegistries = [slicer.UnslicerRegistry,
-                     slicer.BananaUnslicerRegistry,
-                     UnsafeUnslicerRegistry]
-    openRegistries = [slicer.UnslicerRegistry,
-                      UnsafeUnslicerRegistry]
+    topRegistries  = [slicer.UnslicerRegistry, slicer.BananaUnslicerRegistry, UnsafeUnslicerRegistry]
+    openRegistries = [slicer.UnslicerRegistry, UnsafeUnslicerRegistry]
+
 
 class StorageBanana(banana.Banana):
-    object = None
+    object    = None
     violation = None
     disconnectReason = None
     slicerClass = StorageRootSlicer

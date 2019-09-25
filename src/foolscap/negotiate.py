@@ -17,6 +17,7 @@ from foolscap.logging.log import NOISY, OPERATIONAL, WEIRD, UNUSUAL, CURIOUS
 from foolscap.util import isSubstring
 from foolscap import crypto
 
+
 def best_overlap(my_min, my_max, your_min, your_max, name):
     """Find the highest integer which is in both ranges (inclusive).
     Raise NegotiationError (using 'name' in the error message) if there
@@ -28,9 +29,6 @@ def best_overlap(my_min, my_max, your_min, your_max, name):
         raise NegotiationError("You can't handle %s %d" % (name, best))
     return best
 
-def check_inrange(my_min, my_max, decision, name):
-    if decision < my_min or decision > my_max:
-        raise NegotiationError("I can't handle %s %d" % (name, decision))
 
 # negotiation phases
 PLAINTEXT, ENCRYPTED, DECIDING, BANANA, ABANDONED = range(5)
@@ -134,22 +132,23 @@ class Negotiation(protocol.Protocol):
 
     """
 
-    myTubID = None
-    tub = None
+    myTubID    = None
+    tub        = None
     theirTubID = None
 
-    receive_phase = PLAINTEXT # we are expecting this
-    send_phase = PLAINTEXT # the other end is expecting this
+    receive_phase = PLAINTEXT  # we are expecting this
+    send_phase    = PLAINTEXT  # the other end is expecting this
 
-    doNegotiation = True
+    doNegotiation    = True
     forceNegotiation = None
 
-    minVersion = 3
-    maxVersion = 3
+    minVersion = 191
+    maxVersion = 191
 
     brokerClass = broker.Broker
 
-    initialVocabTableRange = vocab.getVocabRange()
+#   initialVocabTableRange = vocab.getVocabRange()
+    initialVocabTableIndices = {vocidx: vocab.hashVocabTable(vocidx) for vocidx in vocab.getVocabIndices()}
 
     SERVER_TIMEOUT = 120 # You have 2 minutes to complete negotiation, or
                          # else. The only reason this isn't closer to 10s is
@@ -161,15 +160,20 @@ class Negotiation(protocol.Protocol):
     def __init__(self, logparent=None):
         self._logparent = log.msg("Negotiation started", parent=logparent,
                                   facility="foolscap.negotiation")
-        for i in range(self.minVersion, self.maxVersion+1):
-            assert hasattr(self, "evaluateNegotiationVersion%d" % i), i
-            assert hasattr(self, "acceptDecisionVersion%d" % i), i
-        assert isinstance(self.initialVocabTableRange, tuple)
+
+        for ver in range(self.minVersion, self.maxVersion + 1):
+            assert hasattr(self, 'evaluateNegotiationVersion{:d}'.format(ver)), ver
+            assert hasattr(self, 'acceptDecisionVersion{:d}'.format(ver)), ver
+
+#       assert isinstance(self.initialVocabTableRange, tuple)
+
         self.negotiationOffer = {
-            "banana-negotiation-range": "%d %d" % (self.minVersion,
-                                                   self.maxVersion),
-            "initial-vocab-table-range": "%d %d" % self.initialVocabTableRange,
-            }
+            'banana-negotiation-range'   : '%d %d' % (self.minVersion, self.maxVersion),
+            'initial-vocab-table-indices': ' '.join('{:d}:{}'.format(vocidx, vochash)
+                for vocidx, vochash in self.initialVocabTableIndices.items())
+#           'initial-vocab-table-range'  : "%d %d" %  self.initialVocabTableRange
+        }
+
         # TODO: for testing purposes, it might be useful to be able to add
         # some keys to this offer
         if self.forceNegotiation is not None:
@@ -177,8 +181,10 @@ class Negotiation(protocol.Protocol):
             # should be a dict of keys or something. distinguish between
             # offer and decision.
             self.negotiationOffer['negotiation-forced'] = "True"
+
         self.buffer = b""
         self._test_options = {}
+
         # to trigger specific race conditions during unit tests, it is useful
         # to allow certain operations to be stalled for a moment.
         # self._test_options will contain a key like
@@ -193,7 +199,6 @@ class Negotiation(protocol.Protocol):
         # connectionMade method. When the connection is lost, all remaining
         # timers will be canceled.
         self.debugTimers = {}
-
         self.debugPauses = {} # similar, but holds a Deferred
 
         # if anything goes wrong during negotiation (version mismatch,
@@ -246,10 +251,10 @@ class Negotiation(protocol.Protocol):
 
     def parseLines(self, header):
         header = header.decode('ascii')
-        lines  = header.split("\r\n")
+        lines  = header.split('\r\n')
         block = {}
         for line in lines:
-            colon = line.index(":")
+            colon = line.index(':')
             key = line[:colon].lower()
             value = line[colon+1:].lstrip()
             block[key] = value
@@ -361,10 +366,11 @@ class Negotiation(protocol.Protocol):
 
     def sendPlaintextClient(self):
         req = []
-        self.log("sendPlaintextClient: GET for tubID %s" %
-                 self.target.tubID)
+
+        self.log("sendPlaintextClient: GET for tubID %s" % self.target.tubID)
         req.append(b"GET /id/%s HTTP/1.1" % self.target.tubID.encode('ascii'))
         req.append(b"Host: %s" % self.targetHost.encode('ascii'))
+
         self.log("sendPlaintextClient: wantEncryption=True")
         req.append(b"Upgrade: TLS/1.0")
         req.append(b"Connection: Upgrade")
@@ -381,8 +387,7 @@ class Negotiation(protocol.Protocol):
         timeout = self._test_options.get('server_timeout', self.SERVER_TIMEOUT)
         if timeout:
             # oldpb clients will hit this case.
-            self.negotiationTimer = reactor.callLater(timeout,
-                                                      self.negotiationTimedOut)
+            self.negotiationTimer = reactor.callLater(timeout, self.negotiationTimedOut)
 
     def sendError(self, why):
         pass # TODO
@@ -401,45 +406,48 @@ class Negotiation(protocol.Protocol):
 
     def dataReceived(self, chunk):
         self.log("dataReceived(isClient=%s,phase=%s,options=%s): %r"
-                 % (self.isClient, self.receive_phase, self._test_options,
-                    chunk),
+                 % (self.isClient, self.receive_phase, self._test_options, chunk),
                  level=NOISY)
+
         if self.receive_phase == ABANDONED:
             return
 
         self.buffer += chunk
 
-        if self.debug_addTimerCallback("connectionMade",
-                                       self.dataReceived, ''):
+        if self.debug_addTimerCallback("connectionMade", self.dataReceived, ''):
             return
 
         try:
             # we accumulate a header block for each phase
             if len(self.buffer) > 4096:
                 raise BananaError("Header too long")
+
             eoh = self.buffer.find(b'\r\n\r\n')
-            if eoh == -1:
-                return
-            header, self.buffer = self.buffer[:eoh], self.buffer[eoh+4:]
-            if self.receive_phase == PLAINTEXT:
-                if self.isClient:
-                    self.handlePLAINTEXTClient(header)
+
+            if 0 <= eoh:
+                header, self.buffer = self.buffer[:eoh], self.buffer[eoh+4:]
+
+                if self.receive_phase == PLAINTEXT:
+                    if self.isClient:
+                        self.handlePLAINTEXTClient(header)
+                    else:
+                        self.handlePLAINTEXTServer(header)
+                elif self.receive_phase == ENCRYPTED:
+                    self.handleENCRYPTED(header)
+                elif self.receive_phase == DECIDING:
+                    self.handleDECIDING(header)
                 else:
-                    self.handlePLAINTEXTServer(header)
-            elif self.receive_phase == ENCRYPTED:
-                self.handleENCRYPTED(header)
-            elif self.receive_phase == DECIDING:
-                self.handleDECIDING(header)
-            else:
-                assert 0, "should not get here"
-            # there might be some leftover data for the next phase.
-            # self.buffer will be emptied when we switchToBanana, so in that
-            # case we won't call the wrong dataReceived.
-            if self.buffer:
-                self.dataReceived(b'')
+                    assert 0, "should not get here"
+
+                # there might be some leftover data for the next phase.
+                # self.buffer will be emptied when we switchToBanana, so in that
+                # case we won't call the wrong dataReceived.
+                if self.buffer:
+                    self.dataReceived(b'')
 
         except Exception as e:
             why = Failure()
+
             if isinstance(e, RemoteNegotiationError):
                 pass # they've already hung up
             else:
@@ -448,23 +456,27 @@ class Negotiation(protocol.Protocol):
                 if isinstance(e, NegotiationError):
                     errmsg = str(e)
                 else:
-                    self.log("negotiation had internal error:", failure=why,
-                             level=UNUSUAL)
+                    self.log("negotiation had internal error:", failure=why, level=UNUSUAL)
                     errmsg = "internal server error, see logs"
+
                 errmsg = errmsg.replace("\n", " ").replace("\r", " ")
+
                 if self.send_phase == PLAINTEXT:
                     resp = b"HTTP/1.1 500 Internal Server Error: %s\r\n\r\n" % errmsg.encode('ascii', 'replace')
                     self.transport.write(resp)
+
                 elif self.send_phase in (ENCRYPTED, DECIDING):
-                    block = {'banana-decision-version': 1,
-                             'error': errmsg.encode('ascii', 'replace')}
+                    block = {
+                        'banana-decision-version': self.minVersion,
+                        'error': errmsg.encode('ascii', 'replace')
+                    }
                     self.sendBlock(block)
+
                 elif self.send_phase == BANANA:
                     self.sendBananaError(errmsg)
 
             self.failureReason = why
             self.transport.loseConnection()
-            return
 
     def sendBananaError(self, msg):
         if len(msg) > SIZE_LIMIT:
@@ -498,30 +510,36 @@ class Negotiation(protocol.Protocol):
         # the client sends us a GET message
         header = header.decode('ascii')
         lines  = header.split("\r\n")
+
         if not lines[0].startswith("GET "):
             raise BananaError("not right")
+
         command, url, version = lines[0].split()
+
         if not url.startswith("/id/"):
             # probably a web browser
             raise BananaError("not right")
+
         targetTubID = url[4:]
-        self.log("handlePLAINTEXTServer: targetTubID='%s'" % targetTubID,
-                 level=NOISY)
+        self.log("handlePLAINTEXTServer: targetTubID='%s'" % targetTubID, level=NOISY)
+
         if targetTubID == "":
             # they're asking for an old UnauthenticatedTub. Refuse.
             raise NegotiationError("secure Tubs require encryption")
+
         if isSubstring("Upgrade: TLS/1.0\r\n", header):
             wantEncrypted = True
         else:
             wantEncrypted = False
-        self.log("handlePLAINTEXTServer: wantEncrypted=%s" % wantEncrypted,
-                 level=NOISY)
+
+        self.log("handlePLAINTEXTServer: wantEncrypted=%s" % wantEncrypted, level=NOISY)
         # we ignore the rest of the lines
 
         # now that we know which Tub the client wants to connect to, either
         # send a Redirect, or start the ENCRYPTED phase
 
         tub, redirect = self.listener.lookupTubID(targetTubID)
+
         if tub:
             self.tub = tub # our tub
             self._test_options.update(self.tub._test_options)
@@ -556,16 +574,18 @@ class Negotiation(protocol.Protocol):
 
     def handlePLAINTEXTClient(self, header):
         self.log("handlePLAINTEXTClient: header='%s'" % header)
+
         header = header.decode('ascii')
         lines  = header.split("\r\n")
         tokens = lines[0].split()
+
         # TODO: accept a 303 redirect
         if tokens[1] != "101":
-            raise BananaError("not right, got '%s', "
-                              "expected 101 Switching Protocols"
-                              % lines[0])
+            raise BananaError("not right, got '%s', expected 101 Switching Protocols" % lines[0])
+
         if not isSubstring("Upgrade: TLS/1.0", header):
             raise BananaError("header didn't contain TLS upgrade: %r" % (header,))
+
         # we ignore everything else
 
         # now we upgrade to TLS
@@ -606,18 +626,22 @@ class Negotiation(protocol.Protocol):
 
     def handleENCRYPTED(self, header):
         # both ends have sent a Hello message
-        if self.debug_addTimerCallback("sendHello",
-                                       self.handleENCRYPTED, header):
+        if self.debug_addTimerCallback('sendHello', self.handleENCRYPTED, header):
             return
+
         self.theirCertificate = None
+
         # We should be encrypted now. Get the peer's certificate.
         them = crypto.peerFromTransport(self.transport)
+
         if them and them.original:
             self.theirCertificate = them
 
         hello = self.parseLines(header)
-        if "error" in hello:
-            raise RemoteNegotiationError(hello["error"])
+
+        if 'error' in hello:
+            raise RemoteNegotiationError(hello['error'])
+
         self.evaluateHello(hello)
 
     def evaluateHello(self, offer):
@@ -638,37 +662,37 @@ class Negotiation(protocol.Protocol):
             - We are not the master: DECISION is None
         """
 
-        self.log("evaluateHello(isClient=%s): offer=%s" % (self.isClient, offer))
+        self.log('evaluateHello(isClient=%s): offer=%s' % (self.isClient, offer))
+
         if 'banana-negotiation-range' not in offer:
-            if 'banana-negotiation-version' in offer:
-                msg = ("Peer is speaking foolscap-0.0.5 or earlier, "
-                       "which is not compatible with this version. "
-                       "Please upgrade the peer.")
-                raise NegotiationError(msg)
-            raise NegotiationError("No valid banana-negotiation sequence seen")
+            raise NegotiationError('No valid banana-negotiation sequence seen')
+
         min_s, max_s = offer['banana-negotiation-range'].split()
+
         theirMinVer = int(min_s)
         theirMaxVer = int(max_s)
-        # best_overlap() might raise a NegotiationError
-        best = best_overlap(self.minVersion, self.maxVersion,
-                            theirMinVer, theirMaxVer,
-                            "banana version")
 
-        negfunc = getattr(self, "evaluateNegotiationVersion%d" % best)
+        # best_overlap() might raise a NegotiationError
+        best = best_overlap(self.minVersion, self.maxVersion, theirMinVer, theirMaxVer, 'banana version')
+
+        negfunc = getattr(self, 'evaluateNegotiationVersion{:d}'.format(best))
+
         self.decision_version = best
+
         return negfunc(offer)
 
-    def evaluateNegotiationVersion1(self, offer):
+    def evaluateNegotiationVersion191(self, offer):
         forced = False
         f = offer.get('negotiation-forced', None)
-        if f and f.lower() == "true":
+
+        if f and f.lower() == 'true':
             forced = True
+
         # 'forced' means the client is on a one-way link (or is really
         # stubborn) and has already made up its mind about the connection
         # parameters. If we are unable to handle exactly what they have
         # offered, we must hang up.
         assert not forced # TODO: implement
-
 
         # glyph says: look at Juice, it does rfc822 parsing, startTLS,
         # switch-to-other-protocol, etc. grep for retrieveConnection in q2q.
@@ -690,14 +714,13 @@ class Negotiation(protocol.Protocol):
 
         myTubID = self.myTubID
 
-        theirTubID = offer.get("my-tub-id")
+        theirTubID = offer.get('my-tub-id')
         if self.theirCertificate is None:
             # no client certificate
             if theirTubID is not None:
                 # this is where a poor MitM attack is detected, one which
                 # doesn't even pretend to encrypt the connection
-                raise BananaError("you must use a certificate to claim a "
-                                  "TubID")
+                raise BananaError('you must use a certificate to claim a TubID')
         else:
             # verify that their claimed TubID matches their SSL certificate.
             # TODO: handle chains
@@ -758,23 +781,19 @@ class Negotiation(protocol.Protocol):
                 acceptOffer = self.compareOfferAndExisting(offer, existing, lp)
                 if acceptOffer:
                     # drop the old one
-                    self.log("accepting new offer, dropping existing connection",
-                             parent=lp)
-                    err = DeadReferenceError("[%s] replaced by a new connection"
-                                             % theirTubRef.getShortTubID())
+                    self.log("accepting new offer, dropping existing connection", parent=lp)
+                    err = DeadReferenceError("[%s] replaced by a new connection" % theirTubRef.getShortTubID())
                     why = Failure(err)
                     existing.shutdown(why)
                 else:
                     # reject the new one
-                    self.log("rejecting the offer: we already have one",
-                             parent=lp)
+                    self.log("rejecting the offer: we already have one", parent=lp)
                     raise DuplicateConnection("Duplicate connection")
 
             if theirTubRef:
                 # generate a new seqnum, one higher than the last one we've
                 # used.
-                old_seqnum = self.tub.master_table.get(theirTubRef.getTubID(),
-                                                       0)
+                old_seqnum = self.tub.master_table.get(theirTubRef.getTubID(), 0)
                 new_seqnum = old_seqnum + 1
                 new_slave_IR = offer.get('my-incarnation', None)
                 self.tub.master_table[theirTubRef.getTubID()] = new_seqnum
@@ -787,22 +806,28 @@ class Negotiation(protocol.Protocol):
                 params['current-seqnum'] = new_seqnum
 
             # what initial vocab set should we use?
-            theirVocabRange_s = offer.get("initial-vocab-table-range", "0 0")
-            theirVocabRange = theirVocabRange_s.split()
-            theirVocabMin = int(theirVocabRange[0])
-            theirVocabMax = int(theirVocabRange[1])
-            vocab_index = best_overlap(
-                self.initialVocabTableRange[0],
-                self.initialVocabTableRange[1],
-                theirVocabMin, theirVocabMax,
-                "initial vocab set")
+            theirVocabIndicesRaw = offer.get('initial-vocab-table-indices')
+
+            if theirVocabIndicesRaw:
+                theirVocabIndices = dict(vocrec.split(':', 1) for vocrec in theirVocabIndicesRaw.split())
+
+                for vocidx, vochash in sorted(theirVocabIndices.items(), reverse=True):
+                    vocidx = int(vocidx)
+                    if self.initialVocabTableIndices.get(vocidx) == vochash:
+                        break
+                else:
+                    raise NegotiationError('Can\'t match initial vocab set', theirVocabIndicesRaw)
+
+                vocab_index = vocidx
+            else:
+                vocab_index = max(self.initialVocabTableIndices.keys())
+
             vocab_hash = vocab.hashVocabTable(vocab_index)
-            decision['initial-vocab-table-index'] = "%d %s" % (vocab_index,
-                                                               vocab_hash)
-            decision['banana-decision-version'] = str(self.decision_version)
+            decision['initial-vocab-table-index'] = '%d %s' % (vocab_index, vocab_hash)
+            decision['banana-decision-version']   = str(self.decision_version)
 
             # v1: handle vocab table index
-            params['banana-decision-version'] = self.decision_version
+            params['banana-decision-version']   = self.decision_version
             params['initial-vocab-table-index'] = vocab_index
 
         else:
@@ -810,30 +835,14 @@ class Negotiation(protocol.Protocol):
             # expect to hear from us is banana.
             self.send_phase = BANANA
 
-
         if iAmTheMaster:
             # I am the master, so I send the decision
-            self.log("Negotiation.sendDecision: %s" % decision,
-                     level=OPERATIONAL)
-            # now we send the decision and switch to Banana. they might hang
-            # up.
+            self.log("Negotiation.sendDecision: %s" % decision, level=OPERATIONAL)
+            # now we send the decision and switch to Banana. they might hang up
             self.sendDecision(decision, params)
         else:
             # I am not the master, I receive the decision
             self.receive_phase = DECIDING
-
-    def evaluateNegotiationVersion2(self, offer):
-        # version 2 changes the meaning of reqID=0 in a 'call' sequence, to
-        # support the implementation of callRemoteOnly. No other protocol
-        # changes were made, and no changes were made to the offer or
-        # decision blocks.
-        return self.evaluateNegotiationVersion1(offer)
-
-    def evaluateNegotiationVersion3(self, offer):
-        # version 3 adds PING and PONG tokens, to enable keepalives and
-        # idle-disconnect. No other protocol changes were made, and no
-        # changes were made to the offer or decision blocks.
-        return self.evaluateNegotiationVersion1(offer)
 
     def compareOfferAndExisting(self, offer, existing, lp):
         """Compare the new offer against the existing connection, and
@@ -982,22 +991,20 @@ class Negotiation(protocol.Protocol):
         return True # accept the offer
 
     def sendDecision(self, decision, params):
-        if self.debug_doTimer("sendDecision", 1,
-                              self.sendDecision, decision, params):
+        if self.debug_doTimer("sendDecision", 1, self.sendDecision, decision, params):
             return
-        if self.debug_addTimerCallback("sendHello",
-                                       self.sendDecision, decision, params):
+
+        if self.debug_addTimerCallback("sendHello", self.sendDecision, decision, params):
             return
+
         self.sendBlock(decision)
         self.send_phase = BANANA
         self.switchToBanana(params)
 
     def handleDECIDING(self, header):
         # this gets called on the non-master side
-        self.log("handleDECIDING(isClient=%s): %s" % (self.isClient, header),
-                 level=NOISY)
-        if self.debug_doTimer("handleDECIDING", 1,
-                              self.handleDECIDING, header):
+        self.log("handleDECIDING(isClient=%s): %s" % (self.isClient, header), level=NOISY)
+        if self.debug_doTimer("handleDECIDING", 1, self.handleDECIDING, header):
             # for testing purposes, wait a moment before accepting the
             # decision. This insures that we trigger the "Duplicate
             # Broker" condition. NOTE: This will interact badly with the
@@ -1013,60 +1020,62 @@ class Negotiation(protocol.Protocol):
         the negotiation from the server. The client must accept this decision
         (and return the connection parameters dict), or raise
         NegotiationError to hang up.negotiationResults."""
+
         self.log("Banana.acceptDecision: got %s" % decision, level=OPERATIONAL)
 
         version = decision.get('banana-decision-version')
+
         if not version:
             raise NegotiationError("No banana-decision-version value")
+
         acceptfunc = getattr(self, "acceptDecisionVersion%d" % int(version))
+
         if not acceptfunc:
-            raise NegotiationError("I cannot handle banana-decision-version "
-                                   "value of %d" % int(version))
+            raise NegotiationError('I cannot handle banana-decision-version value of %d' % int(version))
+
         return acceptfunc(decision)
 
-    def acceptDecisionVersion1(self, decision):
-        if "error" in decision:
-            error = decision["error"]
-            raise RemoteNegotiationError("Banana negotiation failed: %s" % error)
+    def acceptDecisionVersion191(self, decision):
+        if 'error' in decision:
+            raise RemoteNegotiationError('Banana negotiation failed: %s' % decision['error'])
 
         # parse the decision here, create the connection parameters dict
-        ver = int(decision['banana-decision-version'])
+        version = int(decision['banana-decision-version'])
         vocab_index_string = decision.get('initial-vocab-table-index')
+
         if vocab_index_string:
             vocab_index, vocab_hash = vocab_index_string.split()
             vocab_index = int(vocab_index)
+
+            our_hash = vocab.hashVocabTable(vocab_index)
+
+            if our_hash != vocab_hash:
+                raise NegotiationError('Our hash for vocab-table-index %d (%s) '\
+                    'does not match your hash (%s)' % (vocab_index, our_hash, vocab_hash))
         else:
-            vocab_index = 0
-        check_inrange(self.initialVocabTableRange[0],
-                      self.initialVocabTableRange[1],
-                      vocab_index, "initial vocab table index")
-        our_hash = vocab.hashVocabTable(vocab_index)
-        if vocab_index > 0 and our_hash != vocab_hash:
-            msg = ("Our hash for vocab-table-index %d (%s) does not match "
-                   "your hash (%s)" % (vocab_index, our_hash, vocab_hash))
-            raise NegotiationError(msg)
+            vocab_index = min(self.initialVocabTableIndices.keys())
+            vocab_hash  = vocab.hashVocabTable(vocab_index)
 
         if self.theirTubRef in self.tub.brokers:
             # we're the slave, so we need to drop our existing connection and
             # use the one picked by the master
-            self.log("master told us to use a new connection, "
-                     "so we must drop the existing one", level=UNUSUAL)
+            self.log("master told us to use a new connection, so we must drop the existing one", level=UNUSUAL)
             err = DeadReferenceError("replaced by a new connection")
             why = Failure(err)
             self.tub.brokers[self.theirTubRef].shutdown(why)
 
         current_connection = decision.get('current-connection')
+
         if current_connection:
             tubID = self.theirTubRef.getTubID()
             self.tub.slave_table[tubID] = tuple(current_connection.split())
         else:
-            self.log("no current-connection in decision from %s" %
-                     self.theirTubRef, level=UNUSUAL)
+            self.log("no current-connection in decision from %s" % self.theirTubRef, level=UNUSUAL)
 
-        params = { 'banana-decision-version': ver,
-                   'initial-vocab-table-index': vocab_index,
-                   }
-        return params
+        return {
+            'banana-decision-version'  : version,
+            'initial-vocab-table-index': vocab_index,
+        }
 
     def acceptDecisionVersion2(self, decision):
         # this only affects the interpretation of reqID=0, so we can use the
@@ -1081,11 +1090,10 @@ class Negotiation(protocol.Protocol):
     def loopbackDecision(self):
         # if we were talking to ourselves, what negotiation decision would we
         # reach? This is used for loopback connections
-        max_vocab = self.initialVocabTableRange[1]
-        params = { 'banana-decision-version': self.maxVersion,
-                   'initial-vocab-table-index': max_vocab,
-                   }
-        return params
+        return {
+            'banana-decision-version'  : self.maxVersion,
+            'initial-vocab-table-index': max(self.initialVocabTableIndices.keys()),
+        }
 
     def startTLS(self, cert):
         # the TLS connection (according to glyph) is "ready" immediately, but

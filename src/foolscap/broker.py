@@ -1,10 +1,10 @@
 
-
 # This module is responsible for the per-connection Broker object
 import six
 import types, time
-from itertools import count
-from functools import partial
+from itertools import count, chain
+from functools import partial, reduce
+
 from zope.interface import implementer
 from twisted.python import failure
 from twisted.internet import defer, error
@@ -28,18 +28,19 @@ except ImportError:
     pass
 
 PBTopRegistry = {
-    ("call",): call.CallUnslicer,
-    ("answer",): call.AnswerUnslicer,
-    ("error",): call.ErrorUnslicer,
-    }
+    (b'call',)  : call.CallUnslicer,
+    (b'answer',): call.AnswerUnslicer,
+    (b'error',) : call.ErrorUnslicer,
+}
 
 PBOpenRegistry = {
-    ('arguments',): call.ArgumentUnslicer,
-    ('my-reference',): referenceable.ReferenceUnslicer,
-    ('your-reference',): referenceable.YourReferenceUnslicer,
-    ('their-reference',): referenceable.TheirReferenceUnslicer,
-    # ('copyable', classname) is handled inline, through the CopyableRegistry
-    }
+    (b'arguments',)      : call.ArgumentUnslicer,
+    (b'my-reference',)   : referenceable.ReferenceUnslicer,
+    (b'your-reference',) : referenceable.YourReferenceUnslicer,
+    (b'their-reference',): referenceable.TheirReferenceUnslicer,
+    # (b'copyable', classname) is handled inline, through the CopyableRegistry
+}
+
 
 class PBRootUnslicer(RootUnslicer):
     # topRegistries defines what objects are allowed at the top-level
@@ -51,50 +52,41 @@ class PBRootUnslicer(RootUnslicer):
 
     def checkToken(self, typebyte, size):
         if typebyte != tokens.OPEN:
-            raise BananaError("top-level must be OPEN")
+            raise BananaError('top-level must be OPEN')
 
     def openerCheckToken(self, typebyte, size, opentype):
-        if typebyte == tokens.STRING:
-            if len(opentype) == 0:
-                if size > self.maxIndexLength:
-                    why = "first opentype STRING token is too long, %d>%d" % \
-                          (size, self.maxIndexLength)
-                    raise Violation(why)
-            if opentype == ("copyable",):
-                # TODO: this is silly, of course (should pre-compute maxlen)
-                maxlen = reduce(max,
-                                [len(cname) \
-                                 for cname in copyable.CopyableRegistry.keys()]
-                                )
-                if size > maxlen:
-                    why = "copyable-classname token is too long, %d>%d" % \
-                          (size, maxlen)
-                    raise Violation(why)
-        elif typebyte == tokens.VOCAB:
-            return
-        else:
-            # TODO: hack for testing
-            raise Violation("index token 0x%02x not STRING or VOCAB" % \
-                              ord(typebyte))
-            raise BananaError("index token 0x%02x not STRING or VOCAB" % \
-                              ord(typebyte))
+        if opentype == (b'copyable',) and typebyte in (tokens.STRING, tokens.SVOCAB):
+            # TODO: this is silly, of course (should pre-compute maxlen)
+            maxlen = reduce(max, map(len, copyable.CopyableRegistry.keys()))
+            if maxlen < size:
+                raise Violation('copyable-classname token is too long, {:d} > {:d}'\
+                    .format(size, maxlen))
+
+        elif typebyte == tokens.BYTES:
+            if not opentype and self.maxIndexLength < size:
+                raise Violation('first opentype BYTES token is too long, {:d} > {:d}'\
+                    .format(size, self.maxIndexLength))
+
+        elif typebyte != tokens.BVOCAB:
+            raise Violation('opentype not <copyable> ({!r}) and index token 0x{:02x} not BYTES or BVOCAB'\
+                .format(opentype, ord(typebyte)))
 
     def open(self, opentype):
         # used for lower-level objects, delegated up from childunslicer.open
-        child = RootUnslicer.open(self, opentype)
-        if child:
+        child = super().open(opentype)
+        if child is not None:
             child.broker = self.broker
         return child
 
     def doOpen(self, opentype):
-        child = RootUnslicer.doOpen(self, opentype)
-        if child:
+        child = super().doOpen(opentype)
+        if child is not None:
             child.broker = self.broker
         return child
 
     def reportViolation(self, f):
         if self.logViolations:
-            print("hey, something failed:", f)
+            print('hey, something failed:', f)
         return None # absorb the failure
 
     def receiveChild(self, token, ready_deferred):
@@ -102,11 +94,11 @@ class PBRootUnslicer(RootUnslicer):
             self.broker.scheduleCall(token, ready_deferred)
 
 
-
 class PBRootSlicer(RootSlicer):
-    slicerTable = {types.MethodType: referenceable.CallableSlicer,
-                   types.FunctionType: referenceable.CallableSlicer,
-                   }
+    slicerTable = {
+        types.MethodType  : referenceable.CallableSlicer,
+        types.FunctionType: referenceable.CallableSlicer}
+
     def registerRefID(self, refid, obj):
         # references are never Broker-scoped: they're always scoped more
         # narrowly, by the CallSlicer or the AnswerSlicer.
@@ -119,14 +111,15 @@ class RIBroker(remoteinterface.RemoteInterface):
         it."""
         # return Remote(interface=any)
         return Any()
+
     def decref(clid=int, count=int):
         """Release some references to my-reference 'clid'. I will return an
         ack when the operation has completed."""
-        return None
+
     def decgift(giftID=int, count=int):
         """Release some reference to a their-reference 'giftID' that was
         sent earlier."""
-        return None
+
 
 @implementer(RIBroker, IBroker)
 class Broker(banana.Banana, referenceable.Referenceable):
@@ -154,17 +147,23 @@ class Broker(banana.Banana, referenceable.Referenceable):
     def __init__(self, remote_tubref, params={},
                  keepaliveTimeout=None, disconnectTimeout=None,
                  connectionInfo=None):
+
         banana.Banana.__init__(self, params)
+
         self._expose_remote_exception_types = True
         self.remote_tubref = remote_tubref
         self.keepaliveTimeout = keepaliveTimeout
         self.disconnectTimeout = disconnectTimeout
         self._banana_decision_version = params.get("banana-decision-version")
+
         vocab_table_index = params.get('initial-vocab-table-index')
+
         if vocab_table_index:
             table = vocab.INITIAL_VOCAB_TABLES[vocab_table_index]
             self.populateVocabTable(table)
+
         self.initBroker()
+
         self.current_slave_IR = params.get('current-slave-IR')
         self.current_seqnum = params.get('current-seqnum')
         self.creation_timestamp = time.time()
@@ -220,8 +219,7 @@ class Broker(banana.Banana, referenceable.Referenceable):
         # create the remote_broker object. We don't use the usual
         # reference-counting mechanism here, because this is a synthetic
         # object that lives forever.
-        tracker = referenceable.RemoteReferenceTracker(self, 0, None,
-                                                       "RIBroker")
+        tracker = referenceable.RemoteReferenceTracker(self, 0, None, "RIBroker")
         self.remote_broker = referenceable.RemoteReference(tracker)
 
     # connectionTimedOut is called in response to the Banana layer detecting
@@ -587,10 +585,12 @@ class Broker(banana.Banana, referenceable.Referenceable):
         # in which the original caller invoked callRemote(). To insure this,
         # _startCall() is not allowed to insert additional delays before it
         # runs doRemoteCall() on the target object.
-        obj = delivery.obj
-        args = delivery.allargs.args
+
+        obj    = delivery.obj
+        args   = delivery.allargs.args
         kwargs = delivery.allargs.kwargs
-        for i in args + kwargs.values():
+
+        for i in chain(args, kwargs.values()):
             assert not isinstance(i, defer.Deferred)
 
         if delivery.methodSchema:
@@ -605,13 +605,13 @@ class Broker(banana.Banana, referenceable.Referenceable):
         # TODO: move the return-value schema check into
         # Referenceable.doRemoteCall, so the exception's traceback will be
         # attached to the object that caused it
+
         if delivery.methodname is None:
             assert callable(obj)
             return obj(*args, **kwargs)
-        else:
-            obj = ipb.IRemotelyCallable(obj)
-            return obj.doRemoteCall(delivery.methodname, args, kwargs)
 
+        obj = ipb.IRemotelyCallable(obj)
+        return obj.doRemoteCall(delivery.methodname, args, kwargs)
 
     def _callFinished(self, res, delivery):
         reqID = delivery.reqID
@@ -648,10 +648,12 @@ class Broker(banana.Banana, referenceable.Referenceable):
         # raised after we receive the reqID but before we've actually invoked
         # the method, we are called by CallUnslicer.reportViolation and don't
         # get a delivery= argument.
-        if delivery:
-            if (self.tub and self.tub.logLocalFailures) or not self.tub:
+
+        if delivery is not None:
+            if self.tub and self.tub.logLocalFailures or not self.tub:
                 # the 'not self.tub' case is for unit tests
                 delivery.logFailure(f)
+
         if reqID != 0:
             assert self.activeLocalCalls[reqID]
             self.send(call.ErrorSlicer(reqID, f))
@@ -660,13 +662,14 @@ class Broker(banana.Banana, referenceable.Referenceable):
 class StorageBrokerRootSlicer(ScopedRootSlicer):
     # each StorageBroker is a single serialization domain, so we inherit from
     # ScopedRootSlicer
-    slicerTable = {types.MethodType: referenceable.CallableSlicer,
-                   types.FunctionType: referenceable.CallableSlicer,
-                   }
+    slicerTable = {
+        types.MethodType  : referenceable.CallableSlicer,
+        types.FunctionType: referenceable.CallableSlicer,
+    }
 
 PBStorageOpenRegistry = {
     ('their-reference',): referenceable.TheirReferenceUnslicer,
-    }
+}
 
 class StorageBrokerRootUnslicer(PBRootUnslicer):
     # we want all the behavior of PBRootUnslicer, plus the scopedness of a

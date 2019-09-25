@@ -4,34 +4,37 @@ from twisted.internet import defer
 
 from foolscap import copyable, slicer, tokens
 from foolscap.copyable import AttributeDictConstraint
-from foolscap.constraint import ByteStringConstraint
+from foolscap.constraint import StringConstraint
 from foolscap.slicers.list import ListConstraint
 from .tokens import BananaError, Violation
 from foolscap.util import AsyncAND
 from foolscap.logging import log
 
+
 def wrap_remote_failure(f):
     return failure.Failure(tokens.RemoteException(f))
 
+
 class FailureConstraint(AttributeDictConstraint):
-    opentypes = [("copyable", "twisted.python.failure.Failure")]
+    opentypes = [(b"copyable", "twisted.python.failure.Failure")]
     name = "FailureConstraint"
     klass = failure.Failure
 
     def __init__(self):
-        attrs = [('type', ByteStringConstraint(200)),
-                 ('value', ByteStringConstraint(1000)),
-                 ('traceback', ByteStringConstraint(2000)),
-                 ('parents', ListConstraint(ByteStringConstraint(200))),
-                 ]
-        AttributeDictConstraint.__init__(self, *attrs)
+        attrs = [
+            ('type',      StringConstraint(200)),
+            ('value',     StringConstraint(1000)),
+            ('traceback', StringConstraint(2000)),
+            ('parents',   ListConstraint(StringConstraint(200))),
+        ]
+        super().__init__(*attrs)
 
     def checkObject(self, obj, inbound):
         if not isinstance(obj, self.klass):
             raise Violation("is not an instance of %s" % self.klass)
 
 
-class PendingRequest(object):
+class PendingRequest:
     # this object is a local representation of a message we have sent to
     # someone else, that will be executed on their end.
     active = True
@@ -101,21 +104,24 @@ class PendingRequest(object):
                 log.msg("this one was:", why)
                 log.err("multiple failures indicate a problem")
 
+
 class ArgumentSlicer(slicer.ScopedSlicer):
-    opentype = ('arguments',)
+    opentype = (b'arguments',)
 
     def __init__(self, args, kwargs, methodname="?"):
         slicer.ScopedSlicer.__init__(self, None)
         self.args = args
         self.kwargs = kwargs
-        self.which = ""
+        self.which = ""  # @xxx: ???
         self.methodname = methodname
 
     def sliceBody(self, streamable, banana):
         yield len(self.args)
-        for i,arg in enumerate(self.args):
+
+        for i, arg in enumerate(self.args):
             self.which = "arg[%d]-of-%s" % (i, self.methodname)
             yield arg
+
         for argname in sorted(self.kwargs.keys()):
             self.which = "arg[%s]-of-%s" % (argname, self.methodname)
             yield argname
@@ -126,7 +132,7 @@ class ArgumentSlicer(slicer.ScopedSlicer):
 
 
 class CallSlicer(slicer.ScopedSlicer):
-    opentype = ('call',)
+    opentype = (b'call',)
 
     def __init__(self, reqID, clid, methodname, args, kwargs):
         slicer.ScopedSlicer.__init__(self, None)
@@ -145,7 +151,8 @@ class CallSlicer(slicer.ScopedSlicer):
     def describe(self):
         return "<call-%s-%s-%s>" % (self.reqID, self.clid, self.methodname)
 
-class InboundDelivery(object):
+
+class InboundDelivery:
     """An inbound message that has not yet been delivered.
 
     This is created when a 'call' sequence has finished being received. The
@@ -188,25 +195,32 @@ class InboundDelivery(object):
     def logFailure(self, f):
         # called if tub.logLocalFailures is True
         my_short_tubid = "??"
+
         if self.broker.tub: # for tests
             my_short_tubid = self.broker.tub.getShortTubID()
+
         their_short_tubid = "<???>"
+
         if self.broker.remote_tubref:
             their_short_tubid = self.broker.remote_tubref.getShortTubID()
+
         lp = log.msg("an inbound callRemote that we [%s] executed (on behalf "
                      "of someone else, TubID %s) failed"
                      % (my_short_tubid, their_short_tubid),
                      level=log.UNUSUAL)
+
         if self.interface:
             methname = self.interface.getName() + "." + self.methodname
         else:
             methname = self.methodname
+
         log.msg(" reqID=%d, rref=%s, methname=%s" %
                 (self.reqID, self.obj, methname),
                 level=log.NOISY, parent=lp)
         log.msg(" args=%s" % (self.allargs.args,), level=log.NOISY, parent=lp)
         log.msg(" kwargs=%s" % (self.allargs.kwargs,),
                 level=log.NOISY, parent=lp)
+
         #if isinstance(f.type, str):
         #    stack = "getTraceback() not available for string exceptions\n"
         #else:
@@ -217,9 +231,12 @@ class InboundDelivery(object):
                 level=log.NOISY, parent=lp)
         #log.msg(stack, level=log.NOISY, parent=lp)
 
+
 class ArgumentUnslicer(slicer.ScopedUnslicer):
     methodSchema = None
-    debug = False
+    debug   = False
+    numargs = None
+    closed  = None
 
     def setConstraint(self, methodSchema):
         self.methodSchema = methodSchema
@@ -241,21 +258,21 @@ class ArgumentUnslicer(slicer.ScopedUnslicer):
         if self.numargs is None:
             # waiting for positional-arg count
             if typebyte != tokens.INT:
-                raise BananaError("posarg count must be an INT")
-            return
-        if len(self.args) < self.numargs:
+                raise BananaError('posarg count must be an INT')
+
+        elif len(self.args) < self.numargs:
             # waiting for a positional arg
             if self.argConstraint:
                 self.argConstraint.checkToken(typebyte, size)
-            return
-        if self.argname is None:
+
+        elif self.argname is None:
             # waiting for the name of a keyword arg
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
-                raise BananaError("kwarg name must be a STRING")
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
+                raise BananaError('kwarg name must be a STRING')
             # TODO: limit to longest argument name of the method?
-            return
-        # waiting for the value of a kwarg
-        if self.argConstraint:
+
+        elif self.argConstraint:
+            # waiting for the value of a kwarg
             self.argConstraint.checkToken(typebyte, size)
 
     def doOpen(self, opentype):
@@ -273,6 +290,7 @@ class ArgumentUnslicer(slicer.ScopedUnslicer):
                     (self, self.closed, self.num_unreferenceable_children,
                      len(self._ready_deferreds), token, ready_deferred,
                      self.args, self.kwargs))
+
         if self.numargs is None:
             # this token is the number of positional arguments
             assert isinstance(token, int)
@@ -380,26 +398,25 @@ class ArgumentUnslicer(slicer.ScopedUnslicer):
         return self, ready_deferred
 
     def describe(self):
-        s = "<arguments"
+        s = '<arguments'
+
         if self.numargs is not None:
             if len(self.args) < self.numargs:
-                s += " arg[%d]" % len(self.args)
+                s += ' arg[%d]' % len(self.args)
             else:
-                if self.argname is not None:
-                    s += " arg[%s]" % self.argname
-                else:
-                    s += " arg[?]"
+                s += ' arg[%s]' % self.argname if self.argname is not None else ' arg[?]'
+
         if self.closed:
-            s += " closed"
+            s += ' closed'
             # TODO: it would be nice to indicate if we still have unready
             # children
-        s += ">"
-        return s
+
+        return s + '>'
 
 
 class CallUnslicer(slicer.ScopedUnslicer):
-
     debug = False
+    stage = None
 
     def start(self, count):
         # start=0:reqID, 1:objID, 2:methodname, 3: arguments
@@ -416,16 +433,20 @@ class CallUnslicer(slicer.ScopedUnslicer):
         if self.stage == 0:
             if typebyte != tokens.INT:
                 raise BananaError("request ID must be an INT")
+
         elif self.stage == 1:
             if typebyte not in (tokens.INT, tokens.NEG):
                 raise BananaError("object ID must be an INT/NEG")
+
         elif self.stage == 2:
-            if typebyte not in (tokens.STRING, tokens.VOCAB):
+            if typebyte not in (tokens.STRING, tokens.SVOCAB):
                 raise BananaError("method name must be a STRING")
             # TODO: limit to longest method name of self.obj in the interface
+
         elif self.stage == 3:
             if typebyte != tokens.OPEN:
                 raise BananaError("arguments must be an 'arguments' sequence")
+
         else:
             raise BananaError("too many objects given to CallUnslicer")
 
@@ -441,6 +462,7 @@ class CallUnslicer(slicer.ScopedUnslicer):
     def reportViolation(self, f):
         # if the Violation is because we received an ABORT, then we know
         # that the sender knows there was a problem, so don't respond.
+
         if f.value.args[0] == "ABORT received":
             return f
 
@@ -448,6 +470,7 @@ class CallUnslicer(slicer.ScopedUnslicer):
         # back an Error.
         if self.stage > 0:
             self.broker.callFailed(f, self.reqID)
+
         return f # give up our sequence
 
     def receiveChild(self, token, ready_deferred=None):
@@ -552,25 +575,27 @@ class CallUnslicer(slicer.ScopedUnslicer):
         return delivery, ready_deferred
 
     def describe(self):
-        s = "<methodcall"
-        if self.stage == 0:
-            pass
-        if self.stage >= 1:
-            s += " reqID=%d" % self.reqID
-        if self.stage >= 2:
-            s += " obj=%s" % (self.obj,)
-            ifacename = "[none]"
-            if self.interface:
-                ifacename = self.interface.__remote_name__
-            s += " iface=%s" % ifacename
-        if self.stage >= 3:
-            s += " methodname=%s" % self.methodname
-        s += ">"
-        return s
+        s = '<methodcall'
+
+        if self.stage is not None:
+            if self.stage >= 1:
+                s += ' reqID=%d' % self.reqID
+
+            if self.stage >= 2:
+                s += ' obj=%s' % (self.obj,)
+                ifacename = '[none]'
+                if self.interface:
+                    ifacename = self.interface.__remote_name__
+                s += ' iface=%s' % ifacename
+
+            if self.stage >= 3:
+                s += ' methodname=%s' % self.methodname
+
+        return s + '>'
 
 
 class AnswerSlicer(slicer.ScopedSlicer):
-    opentype = ('answer',)
+    opentype = (b'answer',)
 
     def __init__(self, reqID, results, methodname="?"):
         assert reqID != 0
@@ -585,6 +610,7 @@ class AnswerSlicer(slicer.ScopedSlicer):
 
     def describe(self):
         return "<answer-%s-to-%s>" % (self.reqID, self.methodname)
+
 
 class AnswerUnslicer(slicer.ScopedUnslicer):
     request = None
@@ -691,9 +717,8 @@ class AnswerUnslicer(slicer.ScopedUnslicer):
         return "Answer(req=?)"
 
 
-
 class ErrorSlicer(slicer.ScopedSlicer):
-    opentype = ('error',)
+    opentype = (b'error',)
 
     def __init__(self, reqID, f):
         slicer.ScopedSlicer.__init__(self, None)
@@ -707,6 +732,7 @@ class ErrorSlicer(slicer.ScopedSlicer):
 
     def describe(self):
         return "<error-%s>" % self.reqID
+
 
 class ErrorUnslicer(slicer.ScopedUnslicer):
     request = None
@@ -765,19 +791,21 @@ def truncate(s, limit):
         s = s[:limit-3] + ".."
     return s
 
+
 # failures are sent as Copyables
 class FailureSlicer(slicer.BaseSlicer):
-    slices = failure.Failure
+    slices    = failure.Failure
     classname = "twisted.python.failure.Failure"
 
     def slice(self, streamable, banana):
         self.streamable = streamable
-        yield 'copyable'
+        yield b'copyable'
         yield self.classname
         state = self.getStateToCopy(self.obj, banana)
-        for k,v in state.items():
+        for k, v in state.items():
             yield k
             yield v
+
     def describe(self):
         return "<%s>" % self.classname
 
@@ -830,12 +858,15 @@ class FailureSlicer(slicer.BaseSlicer):
                                   + state['traceback'][-1200:])
 
         parents = obj.parents[:]
+
         if parents:
             for i,value in enumerate(parents):
                 parents[i] = truncate(value, 200)
+
         state['parents'] = parents
 
         return state
+
 
 class CopiedFailure(failure.Failure, copyable.RemoteCopyOldStyle):
     # this is a RemoteCopyOldStyle because you can't raise new-style
@@ -914,13 +945,13 @@ class CopiedFailure(failure.Failure, copyable.RemoteCopyOldStyle):
         return "[CopiedFailure instance: %s]" % self.getBriefTraceback()
 
     pickled = 1
-    def printTraceback(self, file=None, elideFrameworkCode=0,
-                       detail='default'):
+    def printTraceback(self, file=None, elideFrameworkCode=0, detail='default'):
         if file is None: file = twlog.logerr
         file.write("Traceback from remote host -- ")
         file.write(self.traceback)
 
 copyable.registerRemoteCopy(FailureSlicer.classname, CopiedFailure)
+
 
 class CopiedFailureSlicer(FailureSlicer):
     # A calls B. B calls C. C fails and sends a Failure to B. B gets a

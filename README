@@ -22,7 +22,7 @@ Full documentation and examples are in the doc/ directory.
 
 DEPENDENCIES:
 
- * Python 2.7
+ * Python 3.5 or later
  * Twisted 16.0.0 or later
  * PyOpenSSL (tested against 16.0.0)
 
@@ -86,3 +86,9 @@ AUTHOR:
  Foolscap is distributed under the same license as Twisted itself, namely the
  MIT license. Details are in the LICENSE file.
 
+ABOUT THIS FORK:
+
+ Я к херам сломал протокол, извините. Так что эта версия Foolscap не совместима
+ с оригинальной.
+
+ На тесты я пока забил.

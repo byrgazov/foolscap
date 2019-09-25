@@ -1,13 +1,15 @@
 
-from __future__ import print_function
 import os, sys, json, ast
+
 from twisted.application import service
 from foolscap.api import Tub
 from foolscap.appserver.services import build_service
 from foolscap.util import move_into_place
 
+
 class UnknownVersion(Exception):
     pass
+
 
 def load_service_data(basedir):
     services_file = os.path.join(basedir, "services.json")
@@ -53,6 +55,7 @@ def load_service_data(basedir):
         data = {"version": 1, "services": services}
     return data # has ["version"]=1 and ["services"]
 
+
 def save_service_data(basedir, data):
     assert data["version"] == 1
     services_file = os.path.join(basedir, "services.json")
@@ -60,6 +63,7 @@ def save_service_data(basedir, data):
     with open(tmpfile, "w") as f:
         json.dump(data, f, indent=2)
     move_into_place(tmpfile, services_file)
+
 
 class AppServer(service.MultiService):
     def __init__(self, basedir=".", stdout=sys.stdout):
@@ -99,13 +103,15 @@ class AppServer(service.MultiService):
     def lookup(self, name):
         # walk through our configured services, see if we know about this one
         services = load_service_data(self.basedir)["services"]
-        s = services.get(name)
-        if not s:
-            return None
-        service_basedir = os.path.join(self.basedir,
-                                       s["relative_basedir"].encode("utf-8"))
-        service_type = s["type"]
-        service_args = [arg.encode("utf-8") for arg in s["args"]]
-        s = build_service(service_basedir, self.tub, service_type, service_args)
-        s.setServiceParent(self)
-        return s
+
+        service_desc = services.get(name)
+
+        if service_desc:
+            service_basedir = os.path.join(self.basedir, service_desc["relative_basedir"])
+            service_type = service_desc["type"]
+            service_args = [arg for arg in service_desc["args"]]
+
+            service = build_service(service_basedir, self.tub, service_type, service_args)
+            service.setServiceParent(self)
+
+            return service

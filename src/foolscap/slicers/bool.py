@@ -8,17 +8,19 @@ from foolscap.slicer import BaseSlicer, LeafUnslicer
 from foolscap.constraint import OpenerConstraint, IntegerConstraint, Any
 
 class BooleanSlicer(BaseSlicer):
-    opentype = ('boolean',)
+    opentype = (b'boolean',)
     trackReferences = False
     def sliceBody(self, streamable, banana):
         if self.obj:
             yield 1
         else:
             yield 0
+
 registerAdapter(BooleanSlicer, bool, tokens.ISlicer)
 
+
 class BooleanUnslicer(LeafUnslicer):
-    opentype = ('boolean',)
+    opentype = (b'boolean',)
 
     value = None
     constraint = None
@@ -52,9 +54,10 @@ class BooleanUnslicer(LeafUnslicer):
     def describe(self):
         return "<bool>"
 
+
 class BooleanConstraint(OpenerConstraint):
     strictTaster = True
-    opentypes = [("boolean",)]
+    opentypes = [(b"boolean",)]
     _myint = IntegerConstraint()
     name = "BooleanConstraint"
 
@@ -67,6 +70,7 @@ class BooleanConstraint(OpenerConstraint):
     def checkObject(self, obj, inbound):
         if type(obj) != bool:
             raise Violation("not a bool")
+
         if self.value != None:
             if obj != self.value:
                 raise Violation("not %s" % self.value)

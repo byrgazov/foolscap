@@ -2,9 +2,10 @@
 
 import os.path, weakref, binascii, re
 from warnings import warn
+
 from zope.interface import implementer
-from twisted.internet import (reactor, defer, protocol, error, interfaces,
-                              endpoints)
+
+from twisted.internet import reactor, defer, protocol, error, interfaces, endpoints
 from twisted.application import service
 from twisted.python.failure import Failure
 from twisted.python.deprecate import deprecated
@@ -15,8 +16,7 @@ from foolscap import connection, util, info
 from foolscap.connections import tcp
 from foolscap.referenceable import SturdyRef
 from .furl import BadFURLError
-from foolscap.tokens import PBError, BananaError, WrongTubIdError, \
-     WrongNameError, NoLocationError
+from foolscap.tokens import PBError, BananaError, WrongTubIdError, WrongNameError, NoLocationError
 from foolscap.reconnector import Reconnector
 from foolscap.logging import log as flog
 from foolscap.logging import log
@@ -24,6 +24,7 @@ from foolscap.logging import publish as flog_publish
 from foolscap.logging.log import UNUSUAL
 
 from foolscap import crypto
+
 
 class Listener(protocol.ServerFactory, service.Service):
     """I am responsible for a single listening port, which connects to a
@@ -114,9 +115,11 @@ class Listener(protocol.ServerFactory, service.Service):
             desc += " on %s" % str(self._lp.getHost())
         return desc
 
+
 def generateSwissnumber(bits):
     bytes = os.urandom(int(bits/8))
     return base32.encode(bytes).decode('ascii')
+
 
 @implementer(ipb.ITub)
 class Tub(service.MultiService):
@@ -192,17 +195,17 @@ class Tub(service.MultiService):
             self.setupEncryption(certData)
 
     def __repr__(self):
-        return "<Tub id=%s>" % self.tubID
+        return '<Tub id=%s>' % self.tubID
 
     def setupEncryptionFile(self, certFile):
         try:
-            certData = open(certFile, "rb").read()
+            certData = open(certFile, 'rb').read()
         except EnvironmentError:
             certData = None
         self.setupEncryption(certData)
 
         if certData is None:
-            f = open(certFile, "wb")
+            f = open(certFile, 'wb')
             f.write(self.getCertData())
             f.close()
 
@@ -212,7 +215,7 @@ class Tub(service.MultiService):
         else:
             cert = self.createCertificate()
         self.myCertificate = cert
-        self.tubID = crypto.digest32(cert.digest("sha1")).decode('ascii')
+        self.tubID = crypto.digest32(cert.digest('sha1')).decode('ascii')
 
     def make_incarnation(self):
         unique = binascii.b2a_hex(os.urandom(8)).decode('ascii')
@@ -585,13 +588,18 @@ class Tub(service.MultiService):
         # about a dirty reactor. We wait on a few things that might not
         # behave.
         dl = []
+
         for rc in list(self.reconnectors):
             rc.stopConnecting()
+
         del self.reconnectors
+
         for c in list(self._activeConnectors):
             c.shutdown()
+
         why = Failure(error.ConnectionDone("Tub.stopService was called"))
-        for b in self.brokers.values():
+
+        for b in list(self.brokers.values()):
             broker_disconnected = defer.Deferred()
             dl.append(broker_disconnected)
             b._notifyOnConnectionLost(
@@ -696,16 +704,17 @@ class Tub(service.MultiService):
     def getReferenceForName(self, name):
         if name in self.nameToReference:
             return self.nameToReference[name]
+
         for lookup in self.nameLookupHandlers:
             ref = lookup(name)
             if ref:
                 if ref not in self.referenceToName:
                     self.referenceToName[ref] = name
                 return ref
+
         # don't reveal the full swissnum
         hint = name[:2]
-        raise KeyError("unable to find reference for name starting with '%s'"
-                       % hint)
+        raise KeyError("unable to find reference for name starting with '%s'" % hint)
 
     def getReferenceForURL(self, url):
         # TODO: who should this be used by?

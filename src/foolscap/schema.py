@@ -53,14 +53,12 @@ modifiers:
             Only valid inside DictOf and AttributeDict.
 
 """
-from past.builtins import long, unicode
-from foolscap.tokens import Violation, UnknownSchemaType, BananaError, \
-     tokenNames
+
+from foolscap.tokens import Violation, UnknownSchemaType, BananaError, tokenNames
 
 # make constraints available in a single location
-from foolscap.constraint import Constraint, Any, ByteStringConstraint, \
-     IntegerConstraint, NumberConstraint, IConstraint, Optional, Shared
-from foolscap.slicers.unicode import UnicodeConstraint
+from foolscap.constraint import Constraint, Any, ByteStringConstraint, StringConstraint
+from foolscap.constraint import IntegerConstraint, NumberConstraint, IConstraint, Optional, Shared
 from foolscap.slicers.bool import BooleanConstraint
 from foolscap.slicers.dict import DictConstraint
 from foolscap.slicers.list import ListConstraint
@@ -69,7 +67,7 @@ from foolscap.slicers.tuple import TupleConstraint
 from foolscap.slicers.none import Nothing
 #  we don't import RemoteMethodSchema from remoteinterface.py, because
 #  remoteinterface.py needs to import us (for addToConstraintTypeMap)
-ignored = [Constraint, Any, ByteStringConstraint, UnicodeConstraint,
+ignored = [Constraint, Any, ByteStringConstraint, StringConstraint,
            IntegerConstraint, NumberConstraint, BooleanConstraint,
            DictConstraint, ListConstraint, SetConstraint, TupleConstraint,
            Nothing, Optional, Shared,
@@ -127,21 +125,16 @@ ChoiceOf = PolyConstraint
 
 def AnyStringConstraint(*args, **kwargs):
     return ChoiceOf(ByteStringConstraint(*args, **kwargs),
-                    UnicodeConstraint(*args, **kwargs))
-
-# keep the old meaning, for now. Eventually StringConstraint should become an
-# AnyStringConstraint
-StringConstraint = ByteStringConstraint
+                    StringConstraint(*args, **kwargs))
 
 constraintMap = {
     bytes: ByteStringConstraint(),
-    unicode: UnicodeConstraint(),
-    bool: BooleanConstraint(),
-    int: IntegerConstraint(),
-    long: IntegerConstraint(maxBytes=1024),
+    str  : StringConstraint(),
+    bool : BooleanConstraint(),
+    int  : IntegerConstraint(maxBytes=1024),
     float: NumberConstraint(),
-    None: Nothing(),
-    }
+    None : Nothing(),
+}
 
 # This module provides a function named addToConstraintTypeMap() which helps
 # to resolve some import cycles.
@@ -179,8 +172,7 @@ def adapt_obj_to_iconstraint(iface, t):
     # hooked in by remoteinterface.py, when it calls addToConstraintTypeMap
 
     # we are the only way to make constraints
-    raise UnknownSchemaType("can't make constraint from '%s' (%s)" %
-                            (t, type(t)))
+    raise UnknownSchemaType("can't make constraint from '%s' (%s)" % (t, type(t)))
 
 from zope.interface.interface import adapter_hooks
 adapter_hooks.append(adapt_obj_to_iconstraint)

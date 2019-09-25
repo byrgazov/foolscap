@@ -8,7 +8,7 @@ from foolscap.constraint import OpenerConstraint, Any, IConstraint
 from foolscap.util import AsyncAND
 
 class DictSlicer(BaseSlicer):
-    opentype = ('dict',)
+    opentype = (b'dict',)
     trackReferences = True
     slices = None
     def sliceBody(self, streamable, banana):
@@ -17,7 +17,7 @@ class DictSlicer(BaseSlicer):
             yield value
 
 class DictUnslicer(BaseUnslicer):
-    opentype = ('dict',)
+    opentype = (b'dict',)
 
     gettingKey = True
     keyConstraint = None
@@ -112,12 +112,12 @@ class DictUnslicer(BaseUnslicer):
     def describe(self):
         if self.gettingKey:
             return "{}"
-        else:
-            return "{}[%s]" % self.key
+        return "{}[%s]" % self.key
 
 
 class OrderedDictSlicer(DictSlicer):
     slices = dict
+
     def sliceBody(self, streamable, banana):
         for key in sorted(self.obj.keys()):
             value = self.obj[key]
@@ -126,20 +126,21 @@ class OrderedDictSlicer(DictSlicer):
 
 
 class DictConstraint(OpenerConstraint):
-    opentypes = [("dict",)]
+    opentypes = [(b"dict",)]
     name = "DictConstraint"
 
     def __init__(self, keyConstraint, valueConstraint, maxKeys=None):
         self.keyConstraint = IConstraint(keyConstraint)
         self.valueConstraint = IConstraint(valueConstraint)
         self.maxKeys = maxKeys
+
     def checkObject(self, obj, inbound):
         if not isinstance(obj, dict):
-            raise Violation("'%s' (%s) is not a Dictionary" % (obj,
-                                                                type(obj)))
+            raise Violation("'%s' (%s) is not a Dictionary" % (obj, type(obj)))
+
         if self.maxKeys != None and len(obj) > self.maxKeys:
-            raise Violation("Dict keys=%d > maxKeys=%d" % (len(obj),
-                                                           self.maxKeys))
+            raise Violation("Dict keys=%d > maxKeys=%d" % (len(obj), self.maxKeys))
+
         for key, value in obj.items():
             self.keyConstraint.checkObject(key, inbound)
             self.valueConstraint.checkObject(value, inbound)

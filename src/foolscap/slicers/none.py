@@ -6,19 +6,22 @@ from foolscap.constraint import OpenerConstraint
 
 
 class NoneSlicer(BaseSlicer):
-    opentype = ('none',)
+    opentype = (b'none',)
     trackReferences = False
     slices = type(None)
+
     def sliceBody(self, streamable, banana):
         # hmm, we need an empty generator. I think a sequence is the only way
         # to accomplish this, other than 'if 0: yield' or something silly
         return []
 
+
 class NoneUnslicer(LeafUnslicer):
-    opentype = ('none',)
+    opentype = (b'none',)
 
     def checkToken(self, typebyte, size):
         raise BananaError("NoneUnslicer does not accept any tokens")
+
     def receiveClose(self):
         return None, None
 
@@ -26,7 +29,7 @@ class NoneUnslicer(LeafUnslicer):
 class Nothing(OpenerConstraint):
     """Accept only 'None'."""
     strictTaster = True
-    opentypes = [("none",)]
+    opentypes = [(b"none",)]
     name = "Nothing"
 
     def checkObject(self, obj, inbound):

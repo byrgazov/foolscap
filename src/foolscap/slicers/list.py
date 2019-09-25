@@ -9,7 +9,7 @@ from foolscap.util import AsyncAND
 
 
 class ListSlicer(BaseSlicer):
-    opentype = ("list",)
+    opentype = (b"list",)
     trackReferences = True
     slices = list
 
@@ -17,12 +17,13 @@ class ListSlicer(BaseSlicer):
         for i in self.obj:
             yield i
 
-class ListUnslicer(BaseUnslicer):
-    opentype = ("list",)
 
+class ListUnslicer(BaseUnslicer):
+    opentype  = (b"list",)
     maxLength = None
     itemConstraint = None
-    debug = False
+    debug   = False
+    content = None
 
     def setConstraint(self, constraint):
         if isinstance(constraint, Any):
@@ -33,18 +34,21 @@ class ListUnslicer(BaseUnslicer):
 
     def start(self, count):
         #self.opener = foo # could replace it if we wanted to
-        self.list = []
-        self.count = count
+        self.content = []
+        self.count   = count
+
         if self.debug:
-            log.msg("%s[%d].start with %s" % (self, self.count, self.list))
-        self.protocol.setObject(count, self.list)
+            log.msg("%s[%d].start with %s" % (self, self.count, self.content))
+
+        self.protocol.setObject(count, self.content)
         self._ready_deferreds = []
 
     def checkToken(self, typebyte, size):
-        if self.maxLength != None and len(self.list) >= self.maxLength:
+        if self.maxLength is not None and len(self.content) >= self.maxLength:
             # list is full, no more tokens accepted
             # this is hit if the max+1 item is a primitive type
             raise Violation("the list is full")
+
         if self.itemConstraint:
             self.itemConstraint.checkToken(typebyte, size)
 
@@ -53,50 +57,61 @@ class ListUnslicer(BaseUnslicer):
         # Violation exception if not, otherwise give it to our opener (which
         # will normally be the RootUnslicer). Apply a constraint to the new
         # unslicer.
-        if self.maxLength != None and len(self.list) >= self.maxLength:
+        if self.maxLength is not None and len(self.content) >= self.maxLength:
             # this is hit if the max+1 item is a non-primitive type
             raise Violation("the list is full")
+
         if self.itemConstraint:
             self.itemConstraint.checkOpentype(opentype)
+
         unslicer = self.open(opentype)
+
         if unslicer:
             if self.itemConstraint:
                 unslicer.setConstraint(self.itemConstraint)
+
         return unslicer
 
     def update(self, obj, index):
         # obj has already passed typechecking
         if self.debug:
             log.msg("%s[%d].update: [%d]=%s" % (self, self.count, index, obj))
+
         assert isinstance(index, int)
-        self.list[index] = obj
+        self.content[index] = obj
+
         return obj
 
     def receiveChild(self, obj, ready_deferred=None):
         if ready_deferred:
             self._ready_deferreds.append(ready_deferred)
+
         if self.debug:
             log.msg("%s[%d].receiveChild(%s)" % (self, self.count, obj))
+
         # obj could be a primitive type, a Deferred, or a complex type like
         # those returned from an InstanceUnslicer. However, the individual
         # object has already been through the schema validation process. The
         # only remaining question is whether the larger schema will accept
         # it.
-        if self.maxLength != None and len(self.list) >= self.maxLength:
+
+        if self.maxLength is not None and len(self.content) >= self.maxLength:
             # this is redundant
             # (if it were a non-primitive one, it would be caught in doOpen)
             # (if it were a primitive one, it would be caught in checkToken)
             raise Violation("the list is full")
+
         if isinstance(obj, Deferred):
             if self.debug:
-                log.msg(" adding my update[%d] to %s" % (len(self.list), obj))
-            obj.addCallback(self.update, len(self.list))
+                log.msg(" adding my update[%d] to %s" % (len(self.content), obj))
+
+            obj.addCallback(self.update, len(self.content))
             obj.addErrback(self.printErr)
-            placeholder = "list placeholder for arg[%d], rd=%s" % \
-                          (len(self.list), ready_deferred)
-            self.list.append(placeholder)
+            placeholder = "list placeholder for arg[%d], rd=%s" % (len(self.content), ready_deferred)
+
+            self.content.append(placeholder)
         else:
-            self.list.append(obj)
+            self.content.append(obj)
 
     def printErr(self, why):
         print("ERR!")
@@ -107,10 +122,12 @@ class ListUnslicer(BaseUnslicer):
         ready_deferred = None
         if self._ready_deferreds:
             ready_deferred = AsyncAND(self._ready_deferreds)
-        return self.list, ready_deferred
+        return self.content, ready_deferred
 
     def describe(self):
-        return "[%d]" % len(self.list)
+        if self.content is None:
+            return '[-]'
+        return '[{:d}]'.format(len(self.content))
 
 
 class ListConstraint(OpenerConstraint):
@@ -118,7 +135,7 @@ class ListConstraint(OpenerConstraint):
     accept lists of any length, use maxLength=None. All member objects must
     obey the given constraint."""
 
-    opentypes = [("list",)]
+    opentypes = [(b"list",)]
     name = "ListConstraint"
 
     def __init__(self, constraint, maxLength=None, minLength=0):

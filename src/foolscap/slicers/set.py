@@ -9,8 +9,9 @@ from foolscap.tokens import Violation
 from foolscap.constraint import OpenerConstraint, Any, IConstraint
 from foolscap.util import AsyncAND
 
+
 class SetSlicer(ListSlicer):
-    opentype = ("set",)
+    opentype = (b"set",)
     trackReferences = True
     slices = set
 
@@ -19,7 +20,7 @@ class SetSlicer(ListSlicer):
             yield i
 
 class FrozenSetSlicer(SetSlicer):
-    opentype = ("immutable-set",)
+    opentype = (b"immutable-set",)
     trackReferences = False
     slices = frozenset
 
@@ -27,10 +28,11 @@ class FrozenSetSlicer(SetSlicer):
 class _Placeholder:
     pass
 
+
 class SetUnslicer(BaseUnslicer):
     # this is a lot like a list, but sufficiently different to make it not
     # worth subclassing
-    opentype = ("set",)
+    opentype = (b"set",)
 
     debug = False
     maxLength = None
@@ -79,8 +81,7 @@ class SetUnslicer(BaseUnslicer):
     def update(self, obj, placeholder):
         # obj has already passed typechecking
         if self.debug:
-            log.msg("%s[%d].update: [%s]=%s" % (self, self.count,
-                                                placeholder, obj))
+            log.msg("%s[%d].update: [%s]=%s" % (self, self.count, placeholder, obj))
         self.set.remove(placeholder)
         self.set.add(obj)
         return obj
@@ -126,8 +127,9 @@ class SetUnslicer(BaseUnslicer):
             ready_deferred = AsyncAND(self._ready_deferreds)
         return self.set, ready_deferred
 
+
 class FrozenSetUnslicer(TupleUnslicer):
-    opentype = ("immutable-set",)
+    opentype = (b"immutable-set",)
 
     def receiveClose(self):
         obj_or_deferred, ready_deferred = TupleUnslicer.receiveClose(self)
@@ -150,7 +152,7 @@ class SetConstraint(OpenerConstraint):
 
     # TODO: if mutable!=None, we won't throw out the wrong set type soon
     # enough. We need to override checkOpenType to accomplish this.
-    opentypes = [("set",), ("immutable-set",)]
+    opentypes = [(b"set",), (b"immutable-set",)]
     name = "SetConstraint"
 
     def __init__(self, constraint, maxLength=None, mutable=None):

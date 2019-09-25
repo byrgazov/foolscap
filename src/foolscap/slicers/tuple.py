@@ -9,11 +9,12 @@ from foolscap.util import AsyncAND
 
 
 class TupleSlicer(ListSlicer):
-    opentype = ("tuple",)
+    opentype = (b"tuple",)
     slices = tuple
 
+
 class TupleUnslicer(BaseUnslicer):
-    opentype = ("tuple",)
+    opentype = (b"tuple",)
 
     debug = False
     constraints = None
@@ -123,11 +124,12 @@ class TupleUnslicer(BaseUnslicer):
 
 
 class TupleConstraint(OpenerConstraint):
-    opentypes = [("tuple",)]
+    opentypes = [(b"tuple",)]
     name = "TupleConstraint"
 
     def __init__(self, *elemConstraints):
         self.constraints = [IConstraint(e) for e in elemConstraints]
+
     def checkObject(self, obj, inbound):
         if not isinstance(obj, tuple):
             raise Violation("not a tuple")

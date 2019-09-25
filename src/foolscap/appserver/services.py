@@ -5,10 +5,14 @@ from twisted.application import service
 from twisted.internet import defer, reactor, protocol
 from foolscap.api import Referenceable
 
+
 class BadServiceArguments(Exception):
     pass
+
+
 class UnknownServiceType(Exception):
     pass
+
 
 class BaseOptions(usage.Options):
     details = None
@@ -18,6 +22,7 @@ class BaseOptions(usage.Options):
             t += self.details
         return t
 
+
 class FileUploaderOptions(BaseOptions):
     synopsis = "Usage: flappserver add BASEDIR upload-file [options] TARGETDIR"
     details = """
@@ -26,11 +31,12 @@ This service allows clients to upload files to a specific directory.
 
     optFlags = [
         ("allow-subdirectories", None, "allow client to write to subdirectories"),
-        ]
+    ]
+
     optParameters = [
         ("mode", None, 0o644,
          "(octal) mode to set uploaded files to, use 0644 for world-readable")
-        ]
+    ]
 
     def opt_mode(self, mode):
         if mode.startswith("0"):
@@ -40,14 +46,16 @@ This service allows clients to upload files to a specific directory.
 
     def parseArgs(self, targetdir):
         self.targetdir = os.path.abspath(targetdir)
+
         if self["allow-subdirectories"]:
             raise BadServiceArguments("--allow-subdirectories is not yet implemented")
+
         if not os.path.exists(self.targetdir):
-            raise BadServiceArguments("targetdir '%s' must already exist"
-                                      % self.targetdir)
+            raise BadServiceArguments("targetdir '%s' must already exist" % self.targetdir)
+
         if not os.access(self.targetdir, os.W_OK):
-            raise BadServiceArguments("targetdir '%s' must be writeable"
-                                      % self.targetdir)
+            raise BadServiceArguments("targetdir '%s' must be writeable" % self.targetdir)
+
 
 class FileUploaderReader(Referenceable):
     BLOCKSIZE = 1024*1024
@@ -79,6 +87,7 @@ class FileUploaderReader(Referenceable):
 
 class BadFilenameError(Exception):
     pass
+
 
 class FileUploader(service.MultiService, Referenceable):
     def __init__(self, basedir, tub, options):
@@ -136,6 +145,7 @@ class FileUploader(service.MultiService, Referenceable):
             return fail
         d.addCallbacks(_done, _err)
         return d
+
 
 class CommandRunnerOptions(BaseOptions):
     synopsis = "Usage: flappserver add BASEDIR run-command [options] TARGETDIR COMMAND.."
@@ -203,6 +213,7 @@ the exit code, optionally providing stdin and receiving stdout/stderr.
         self.targetdir = targetdir
         self.command_argv = command_argv
 
+
 class CommandPP(protocol.ProcessProtocol):
     def __init__(self, outpipe, errpipe, watcher, log_stdout, log_stderr):
         self.outpipe = outpipe
@@ -210,15 +221,19 @@ class CommandPP(protocol.ProcessProtocol):
         self.watcher = watcher
         self.log_stdout = log_stdout
         self.log_stderr = log_stderr
+
     def outReceived(self, data):
         if self.outpipe:
             self.outpipe.callRemoteOnly("stdout", data)
+
         if self.log_stdout:
             sent = {True:"sent", False:"not sent"}[bool(self.outpipe)]
             log.msg("stdout (%s): %r" % (sent, data))
+
     def errReceived(self, data):
         if self.errpipe:
             self.errpipe.callRemoteOnly("stderr", data)
+
         if self.log_stderr:
             sent = {True:"sent", False:"not sent"}[bool(self.errpipe)]
             log.msg("stderr (%s): %r" % (sent, data))
@@ -229,11 +244,13 @@ class CommandPP(protocol.ProcessProtocol):
         log.msg("process ended (signal=%s, rc=%s)" % (e.signal, code))
         self.watcher.callRemoteOnly("done", e.signal, code)
 
+
 class Command(Referenceable):
     def __init__(self, process, log_stdin):
         self.process = process
         self.log_stdin = log_stdin
         self.closed = False
+
     def remote_feed_stdin(self, data):
         if not isinstance(data, str):
             raise TypeError("stdin can accept only strings of bytes, not '%s'"
@@ -241,12 +258,14 @@ class Command(Referenceable):
         if self.log_stdin:
             log.msg("stdin: %r" % data)
         self.process.write(data)
+
     def remote_close_stdin(self):
         if not self.closed:
             self.closed = True
             if self.log_stdin:
                 log.msg("stdin closed")
             self.process.closeStdin()
+
 
 class CommandRunner(service.MultiService, Referenceable):
     def __init__(self, basedir, tub, options):
@@ -280,10 +299,12 @@ class CommandRunner(service.MultiService, Referenceable):
             return c
         return None
 
+
 all_services = {
     "upload-file": (FileUploaderOptions, FileUploader),
     "run-command": (CommandRunnerOptions, CommandRunner),
-    }
+}
+
 
 def build_service(basedir, tub, service_type, service_args):
     # this will be replaced by a plugin system. For now it's pretty static.
@@ -293,6 +314,5 @@ def build_service(basedir, tub, service_type, service_args):
         options.parseOptions(service_args)
         service = svcclass(basedir, tub, options)
         return service
-    else:
-        raise UnknownServiceType(service_type)
 
+    raise UnknownServiceType(service_type)

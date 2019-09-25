@@ -1,20 +1,23 @@
 # -*- test-case-name: foolscap.test.test_banana -*-
 
-import functools
 import types
+from functools import reduce
+
 from zope.interface import implementer
+
 from twisted.internet.defer import Deferred
+from twisted.python import log
+
 from foolscap import tokens
 from foolscap.tokens import Violation, BananaError
 from foolscap.slicer import BaseUnslicer, ReferenceSlicer
 from foolscap.slicer import UnslicerRegistry, BananaUnslicerRegistry
 from foolscap.slicers.vocab import ReplaceVocabularyTable, AddToVocabularyTable
 from foolscap import copyable # does this create a cycle?
-from twisted.python import log
+
 
 @implementer(tokens.ISlicer, tokens.IRootSlicer)
 class RootSlicer:
-
     streamableInGeneral = True
     producingDeferred = None
     objectSentDeferred = None
@@ -22,7 +25,7 @@ class RootSlicer:
     debug = False
 
     def __init__(self, protocol):
-        self.protocol = protocol
+        self.protocol  = protocol
         self.sendQueue = []
 
     def allowStreaming(self, streamable):
@@ -32,15 +35,18 @@ class RootSlicer:
         pass
 
     def slicerForObject(self, obj):
-        # could use a table here if you think it'd be faster than an
-        # adapter lookup
-        if self.debug: log.msg("slicerForObject(%s)" % type(obj))
+        # could use a table here if you think it'd be faster than an adapter lookup
+
+        if self.debug:
+            log.msg("slicerForObject(%s)" % type(obj))
 
         # do the adapter lookup first, so that registered adapters override
         # UnsafeSlicerTable's InstanceSlicer
         slicer = tokens.ISlicer(obj, None)
+
         if slicer:
-            if self.debug: log.msg("got ISlicer %s" % slicer)
+            if self.debug:
+                log.msg("got ISlicer %s" % slicer)
             return slicer
 
         # zope.interface doesn't do transitive adaptation, which is a shame
@@ -51,40 +57,53 @@ class RootSlicer:
         # so instead we manually do it here
 
         copier = copyable.ICopyable(obj, None)
+
         if copier:
-            s = tokens.ISlicer(copier)
-            return s
+            return tokens.ISlicer(copier)
 
         slicerFactory = self.slicerTable.get(type(obj))
+
         if slicerFactory:
-            if self.debug: log.msg(" got slicerFactory %s" % slicerFactory)
+            if self.debug:
+                log.msg(" got slicerFactory %s" % slicerFactory)
             return slicerFactory(obj)
+
         if issubclass(type(obj), types.InstanceType):
             name = str(obj.__class__)
         else:
             name = str(type(obj))
-        if self.debug: log.msg("cannot serialize %s (%s)" % (obj, name))
+
+        if self.debug:
+            log.msg("cannot serialize %s (%s)" % (obj, name))
+
         raise Violation("cannot serialize %s (%s)" % (obj, name))
 
-    def slice(self):
-        return self
     def __iter__(self):
-        return self # we are our own iterator
-    def next(self):
-        return self.__next__()
+        return self  # we are our own iterator
+
     def __next__(self):
         if self.objectSentDeferred:
             self.objectSentDeferred.callback(None)
             self.objectSentDeferred = None
+
         if self.sendQueue:
             (obj, self.objectSentDeferred) = self.sendQueue.pop()
             self.streamable = self.streamableInGeneral
             return obj
+
         if self.protocol.debugSend:
             print("LAST BAG")
+
         self.producingDeferred = Deferred()
         self.streamable = True
+
         return self.producingDeferred
+
+    def slice(self):
+        return self
+
+    def next(self):
+        return self.__next__()
 
     def childAborted(self, f):
         assert self.objectSentDeferred
@@ -122,6 +141,7 @@ class RootSlicer:
             d.errback(why)
         self.sendQueue = []
 
+
 class ScopedRootSlicer(RootSlicer):
     # this combines RootSlicer with foolscap.slicer.ScopedSlicer . The funny
     # self-delegation of slicerForObject() means we can't just inherit from
@@ -146,7 +166,6 @@ class ScopedRootSlicer(RootSlicer):
         return RootSlicer.slicerForObject(self, obj)
 
 
-
 class RootUnslicer(BaseUnslicer):
     # topRegistries is used for top-level objects
     topRegistries = [UnslicerRegistry, BananaUnslicerRegistry]
@@ -162,7 +181,7 @@ class RootUnslicer(BaseUnslicer):
         for r in self.topRegistries + self.openRegistries:
             for k in r.keys():
                 keys.append(len(k[0]))
-        self.maxIndexLength = functools.reduce(max, keys)
+        self.maxIndexLength = reduce(max, keys)
 
     def start(self, count):
         pass
@@ -179,17 +198,12 @@ class RootUnslicer(BaseUnslicer):
     def openerCheckToken(self, typebyte, size, opentype):
         if typebyte == tokens.STRING:
             if size > self.maxIndexLength:
-                why = "STRING token is too long, %d>%d" % \
-                      (size, self.maxIndexLength)
+                why = "STRING token is too long, %d>%d" % (size, self.maxIndexLength)
                 raise Violation(why)
-        elif typebyte == tokens.VOCAB:
-            return
-        else:
+        elif typebyte != tokens.SVOCAB:
             # TODO: hack for testing
-            raise Violation("index token 0x%02x not STRING or VOCAB" % \
-                              ord(typebyte))
-            raise BananaError("index token 0x%02x not STRING or VOCAB" % \
-                              ord(typebyte))
+            raise Violation("index token 0x%02x not STRING or SVOCAB" % ord(typebyte))
+            raise BananaError("index token 0x%02x not STRING or SVOCAB" % ord(typebyte))
 
     def open(self, opentype):
         # called (by delegation) by the top Unslicer on the stack, regardless
@@ -197,14 +211,13 @@ class RootUnslicer(BaseUnslicer):
         # objects: non-top-level nodes
         assert len(self.protocol.receiveStack) > 1
 
-        if opentype[0] == 'copyable':
+        if opentype[0] == b'copyable':
             if len(opentype) > 1:
                 copyablename = opentype[1]
                 try:
                     factory = copyable.CopyableRegistry[copyablename]
                 except KeyError:
-                    raise Violation("unknown RemoteCopy name '%s'" \
-                                    % copyablename)
+                    raise Violation("unknown RemoteCopy name '%s'" % copyablename)
                 child = factory()
                 return child
             return None # still waiting for copyablename
@@ -220,8 +233,10 @@ class RootUnslicer(BaseUnslicer):
     def doOpen(self, opentype):
         # this is only called for top-level objects
         assert len(self.protocol.receiveStack) == 1
+
         if self.constraint:
             self.constraint.checkOpentype(opentype)
+
         for reg in self.topRegistries:
             opener = reg.get(opentype)
             if opener is not None:
@@ -232,22 +247,28 @@ class RootUnslicer(BaseUnslicer):
 
         if self.constraint:
             child.setConstraint(self.constraint)
+
         return child
 
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, Deferred)
         assert ready_deferred is None
+
         if self.protocol.debugReceive:
             print("RootUnslicer.receiveChild(%s)" % (obj,))
+
         self.objects = {}
+
         if obj in (ReplaceVocabularyTable, AddToVocabularyTable):
             # the unslicer has already changed the vocab table
             return
+
         if self.protocol.exploded:
             print("protocol exploded, can't deliver object")
             print(self.protocol.exploded)
             self.protocol.receivedObject(self.protocol.exploded)
             return
+
         self.protocol.receivedObject(obj) # give finished object to Banana
 
     def receiveClose(self):
@@ -263,7 +284,8 @@ class RootUnslicer(BaseUnslicer):
         pass
 
     def getObject(self, counter):
-        return None
+        pass
+
 
 class ScopedRootUnslicer(RootUnslicer):
     # combines RootUnslicer and ScopedUnslicer

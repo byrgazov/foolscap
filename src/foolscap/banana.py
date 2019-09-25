@@ -1,6 +1,8 @@
 
 import six
 import struct, time
+import collections
+
 from twisted.internet import protocol, defer, reactor
 from twisted.python.failure import Failure
 from twisted.python import log
@@ -11,84 +13,50 @@ from foolscap.slicers.allslicers import RootSlicer, RootUnslicer
 from foolscap.slicers.allslicers import ReplaceVocabSlicer, AddVocabSlicer
 
 from . import tokens
-from .tokens import (SIZE_LIMIT, STRING, LIST, INT, NEG,
-     LONGINT, LONGNEG, VOCAB, FLOAT, OPEN, CLOSE, ABORT, ERROR,
-     PING, PONG,
-     BananaError, BananaFailure, Violation)
+
+from .tokens import BananaError, BananaFailure, Violation
+from .tokens import SIZE_LIMIT, LIST, INT, NEG, FLOAT, OPEN, CLOSE, ABORT, ERROR, PING, PONG
+from .tokens import BYTES, STRING, BVOCAB, SVOCAB
+
 
 EPSILON = 0.1
+MAXINT  =  2 ** 31 - 1
+MININT  = -2 ** 31
 
-def int2b128(integer, stream):
-    if integer == 0:
-        stream(b'\x00')
+struct_uint  = struct.Struct('>I')
+struct_float = struct.Struct('!d')
+
+
+def int2b128(value, write=None):
+    if value < 0:
+        raise ValueError('can only encode positive integers')
+
+    if value < 0x80:
+        if write is None:
+            return bytes((value,))
+        write(bytes((value,)))
+
     else:
-        assert integer > 0, "can only encode positive integers"
-        while integer:
-            stream(bytes((integer & 0x7f,)))
-            integer = integer >> 7
+        data = b''
+        while value:
+            data += bytes((value & 0x7f,))
+            value = value >> 7
+
+        if write is None:
+            return data
+        write(data)
+
 
 def b1282int(st):
-    # NOTE that this is little-endian
-    oneHundredAndTwentyEight = 128
+    e = 1
     i = 0
-    place = 0
     for char in st:
-        num = ord(char)
-        i = i + (num * (oneHundredAndTwentyEight ** place))
-        place = place + 1
+        i += (char * e)
+        e <<= 7
     return i
 
-# long_to_bytes and bytes_to_long taken from PyCrypto: Crypto/Util/number.py
-
-def long_to_bytes(n, blocksize=0):
-    """long_to_bytes(n:long, blocksize:int) : string
-    Convert a long integer to a byte string.
-
-    If optional blocksize is given and greater than zero, pad the front of
-    the byte string with binary zeros so that the length is a multiple of
-    blocksize.
-    """
-    # after much testing, this algorithm was deemed to be the fastest
-    s = ''
-    n = long(n)
-    pack = struct.pack
-    while n > 0:
-        s = pack('>I', n & 0xffffffff) + s
-        n = n >> 32
-    # strip off leading zeros
-    for i in range(len(s)):
-        if s[i] != '\000':
-            break
-    else:
-        # only happens when n == 0
-        s = '\000'
-        i = 0
-    s = s[i:]
-    # add back some pad bytes. this could be done more efficiently w.r.t. the
-    # de-padding being done above, but sigh...
-    if blocksize > 0 and len(s) % blocksize:
-        s = (blocksize - len(s) % blocksize) * '\000' + s
-    return s
-
-def bytes_to_long(s):
-    """bytes_to_long(string) : long
-    Convert a byte string to a long integer.
-
-    This is (essentially) the inverse of long_to_bytes().
-    """
-    acc = 0
-    unpack = struct.unpack
-    length = len(s)
-    if length % 4:
-        extra = (4 - length % 4)
-        s = '\000' * extra + s
-        length = length + extra
-    for i in range(0, length, 4):
-        acc = (acc << 32) + unpack('>I', s[i:i+4])[0]
-    return long(acc)
 
 HIGH_BIT_SET = 0x80
-
 
 
 # Banana is a big class. It is split up into three sections: sending,
@@ -96,6 +64,10 @@ HIGH_BIT_SET = 0x80
 # the __init__ functions got too weird.
 
 class Banana(protocol.Protocol):
+    sizeLimit   = SIZE_LIMIT
+    prefixLimit = 64
+    smallestInt = -2 ** (prefixLimit * 7) + 1
+    largestInt  =  2 ** (prefixLimit * 7) - 1
 
     def __init__(self, features={}):
         """
@@ -158,9 +130,9 @@ class Banana(protocol.Protocol):
     # calls transport.write() and transport.loseConnection()
 
     slicerClass = RootSlicer # this is used in connectionMade()
-    paused = False
-    streamable = True # this is checked at connectionMade() time
-    debugSend = False
+    paused      = False
+    streamable  = True # this is checked at connectionMade() time
+    debugSend   = False
 
     def initSend(self):
         self.openCount = 0
@@ -171,16 +143,19 @@ class Banana(protocol.Protocol):
     def initSlicer(self):
         self.rootSlicer = self.slicerClass(self)
         self.rootSlicer.allowStreaming(self.streamable)
+
         assert tokens.ISlicer.providedBy(self.rootSlicer)
         assert tokens.IRootSlicer.providedBy(self.rootSlicer)
 
         itr = self.rootSlicer.slice()
-        next_itr = iter(itr).__next__
-        top = (self.rootSlicer, next_itr, None)
+        itr = iter(itr).__next__
+        top = (self.rootSlicer, itr, None)
+
         self.slicerStack = [top]
 
     def send(self, obj):
-        if self.debugSend: print("Banana.send(%s)" % obj)
+        if self.debugSend:
+            print("Banana.send(%s)" % obj)
         return self.rootSlicer.send(obj)
 
     def _slice_error(self, f, s):
@@ -191,23 +166,26 @@ class Banana(protocol.Protocol):
         # optimize: cache 'next' because we get many more tokens than stack
         # pushes/pops
         while self.slicerStack and not self.paused:
-            if self.debugSend: print("produce.loop")
+            if self.debugSend:
+                print('produce.loop')
+
             try:
                 slicer, next, openID = self.slicerStack[-1]
                 obj = next()
-                if self.debugSend: print(" produce.obj=%s" % (obj,))
+
+                if self.debugSend:
+                    print(' produce.obj=%s' % (obj,))
+
                 if isinstance(obj, defer.Deferred):
-                    for s,n,o in self.slicerStack:
+                    for s, n, o in self.slicerStack:
                         if not s.streamable:
-                            raise Violation("parent not streamable")
+                            raise Violation('parent not streamable')
                     obj.addCallback(self.produce)
                     obj.addErrback(self._slice_error, s)
                     # this is the primary exit point
                     break
-                elif type(obj) in (int, float, str):
-                    # sendToken raises a BananaError for weird tokens
-                    self.sendToken(obj)
-                else:
+
+                elif not self.sendToken(obj):
                     # newSlicerFor raises a Violation for unsendable types
                     # pushSlicer calls .slice, which can raise Violation
                     try:
@@ -228,12 +206,12 @@ class Banana(protocol.Protocol):
 
                         f = BananaFailure()
                         if self.debugSend:
-                            print(" violation in newSlicerFor:", f)
-                        self.handleSendViolation(f,
-                                                 doPop=False, sendAbort=False)
+                            print(' violation in newSlicerFor:', f)
+                        self.handleSendViolation(f, doPop=False, sendAbort=False)
 
             except StopIteration:
-                if self.debugSend: print("StopIteration")
+                if self.debugSend:
+                    print('StopIteration')
                 self.popSlicer()
 
             except Violation as v:
@@ -241,14 +219,15 @@ class Banana(protocol.Protocol):
                 # before the Slicer is pushed. A Violation that is caught
                 # here was raised inside .next(), or .streamable wasn't
                 # obeyed. The Slicer should now be abandoned.
-                if self.debugSend: print(" violation in .next:", v)
+                if self.debugSend:
+                    print(' violation in .next:', v)
 
                 f = BananaFailure()
                 self.handleSendViolation(f, doPop=True, sendAbort=True)
 
             except:
-                print("exception in produce")
-                log.msg("exception in produce")
+                print('exception in produce')
+                log.msg('exception in produce')
                 self.sendFailed(Failure())
                 # there is no point to raising this again. The Deferreds are
                 # all errbacked in sendFailed(). This function was called
@@ -312,8 +291,10 @@ class Banana(protocol.Protocol):
         return topSlicer.slicerForObject(obj)
 
     def pushSlicer(self, slicer, obj):
-        if self.debugSend: print("push", slicer)
-        assert len(self.slicerStack) < 10000 # failsafe
+        if self.debugSend:
+            print('push', slicer)
+
+        assert len(self.slicerStack) < 10000  # failsafe
 
         # if this method raises a Violation, it means that .slice failed,
         # and neither the OPEN nor the stack-push has occurred
@@ -361,7 +342,8 @@ class Banana(protocol.Protocol):
         slicer, next, openID = self.slicerStack.pop()
         if openID is not None:
             self.sendClose(openID)
-        if self.debugSend: print("pop", slicer)
+        if self.debugSend:
+            print('pop', slicer)
 
     def describeSend(self):
         where = []
@@ -369,18 +351,18 @@ class Banana(protocol.Protocol):
             try:
                 piece = i[0].describe()
             except:
-                log.msg("Banana.describeSend")
+                log.msg('Banana.describeSend')
                 log.err()
-                piece = "???"
+                piece = '???'
             where.append(piece)
-        return ".".join(where)
+        return '.'.join(where)
 
-    def setOutgoingVocabulary(self, vocabStrings):
+    def setOutgoingVocabulary(self, vocabBytes):
         """Schedule a replacement of the outbound VOCAB table.
 
         Higher-level code may call this at any time with a list of strings.
         Immediately after the replacement has occured, the outbound VOCAB
-        table will contain all of the strings in vocabStrings and nothing
+        table will contain all of the strings in vocabBytes and nothing
         else. This table tells the token-sending code which strings to
         abbreviate with short integers in a VOCAB token.
 
@@ -396,10 +378,14 @@ class Banana(protocol.Protocol):
         """
         # build a VOCAB message, send it, then set our outgoingVocabulary
         # dictionary to start using the new table
-        assert isinstance(vocabStrings, (list, tuple))
-        for s in vocabStrings:
-            assert isinstance(s, str)
-        vocabDict = dict([(v, k) for k, v in enumerate(vocabStrings)])
+
+        assert isinstance(vocabBytes, (list, tuple))
+
+        for s in vocabBytes:
+            assert isinstance(s, bytes)
+
+        vocabDict = dict([(v, k) for k, v in enumerate(vocabBytes)])
+
         s = ReplaceVocabSlicer(vocabDict)
         # the ReplaceVocabSlicer does some magic to insure the VOCAB message
         # does not use vocab tokens itself. This would be legal (sort of a
@@ -424,14 +410,11 @@ class Banana(protocol.Protocol):
         condition?) The string will not actually be added to the table until
         the outbound serialization queue has been serviced.
         """
-        assert isinstance(value, str)
-        if value in self.outgoingVocabulary:
-            return
-        if value in self.pendingVocabAdditions:
-            return
-        self.pendingVocabAdditions.add(str)
-        s = AddVocabSlicer(value)
-        self.send(s)
+        assert isinstance(value, bytes)
+
+        if value not in self.outgoingVocabulary and value not in self.pendingVocabAdditions:
+            self.pendingVocabAdditions.add(value)  # [bw] возможна утечка?
+            self.send(AddVocabSlicer(value))
 
     def outgoingVocabTableWasReplaced(self, newTable):
         # this is called by the ReplaceVocabSlicer to manipulate our table.
@@ -443,23 +426,26 @@ class Banana(protocol.Protocol):
         else:
             self.nextAvailableOutgoingVocabularyIndex = 0
 
-    def allocateEntryInOutgoingVocabTable(self, string):
-        assert string not in self.outgoingVocabulary
+    def allocateEntryInOutgoingVocabTable(self, value):
+        assert value not in self.outgoingVocabulary
+
         # TODO: a softer failure more for this assert is to re-send the
         # existing key. To make sure that really happens, though, we have to
         # remove it from the vocab table, otherwise we'll tokenize the
         # string. If we can insure that, then this failure mode would waste
         # time and network but would otherwise be harmless.
         #
-        # return self.outgoingVocabulary[string]
+        # return self.outgoingVocabulary[value]
 
-        self.pendingVocabAdditions.remove(self.value)
+        self.pendingVocabAdditions.remove(value)  # [bw] --> outgoingVocabTableWasAmended
         index = self.nextAvailableOutgoingVocabularyIndex
         self.nextAvailableOutgoingVocabularyIndex = index + 1
         return index
 
-    def outgoingVocabTableWasAmended(self, index, string):
-        self.outgoingVocabulary[string] = index
+    def outgoingVocabTableWasAmended(self, index, value):
+        assert type(index) is int,   type(index)
+        assert type(value) is bytes, type(value)
+        self.outgoingVocabulary[value] = index
 
     # these methods define how we emit low-level tokens
 
@@ -482,46 +468,59 @@ class Banana(protocol.Protocol):
 
     def sendToken(self, obj):
         write = self.transport.write
+
         if isinstance(obj, int):
-            if obj >= 2**31:
-                s = long_to_bytes(obj)
-                int2b128(len(s), write)
-                write(LONGINT)
-                write(s)
-            elif obj >= 0:
-                int2b128(obj, write)
-                write(INT)
-            elif -obj > 2**31: # NEG is [-2**31, 0)
-                s = long_to_bytes(-obj)
-                int2b128(len(s), write)
-                write(LONGNEG)
-                write(s)
-            else:
+            if obj < self.smallestInt or self.largestInt < obj:
+                raise BananaError('int is too large to send (%d)' % obj)
+            if obj < 0:
                 int2b128(-obj, write)
                 write(NEG)
-        elif isinstance(obj, float):
-            write(FLOAT)
-            write(struct.pack("!d", obj))
-        elif isinstance(obj, str):
-            if obj in self.outgoingVocabulary:
-                symbolID = self.outgoingVocabulary[obj]
-                int2b128(symbolID, write)
-                write(VOCAB)
             else:
-                self.maybeVocabizeString(obj)
-                int2b128(len(obj), write)
-                write(STRING)
-                write(obj)
-        else:
-            raise BananaError("could not send object: %s" % repr(obj))
+                int2b128(obj, write)
+                write(INT)
+            return True
 
-    def maybeVocabizeString(self, string):
-        # TODO: keep track of the last 30 strings we've send in full. If this
-        # string appears more than 3 times on that list, create a vocab item
-        # for it. Make sure we don't start using the vocab number until the
-        # ADDVOCAB token has been queued.
-        if False:
-            self.addToOutgoingVocabulary(string)
+        if isinstance(obj, float):
+            write(FLOAT)
+            write(struct_float.pack(obj))
+            return True
+
+        if isinstance(obj, bytes):
+            if self.debugSend:
+                print('sendToken[bytes]: ({}) {!r}'.format(len(obj), obj))
+            if obj in self.outgoingVocabulary:
+                int2b128(self.outgoingVocabulary[obj], write)
+                write(BVOCAB)
+            else:
+                if self.sizeLimit < len(obj):
+                    raise BananaError('bytes is too long to send (%d)', obj)
+# @todo:        self.maybeVocabizeSymbol(obj) / maybeVocabizeString
+                int2b128(len(obj), write)
+                write(BYTES)
+                write(obj)
+            return True
+
+        if isinstance(obj, str):
+            if self.debugSend:
+                print('sendToken[str]: ({}) {!r}'.format(len(obj), obj))
+            data = obj.encode('utf8')
+            if data in self.outgoingVocabulary:
+                int2b128(self.outgoingVocabulary[data], write)
+                write(SVOCAB)
+            else:
+                if self.sizeLimit < len(data):
+                    raise BananaError('string is too long to send', data)
+# @todo:        self.maybeVocabizeSymbol(obj) / maybeVocabizeString
+                int2b128(len(data), write)
+                write(STRING)
+                write(data)
+            return True
+
+        # @todo: (?) NONE / BOOL / ...
+        #else:
+        #   raise BananaError("could not send object: %s" % repr(obj))
+
+        return False
 
     def sendClose(self, openID):
         int2b128(openID, self.transport.write)
@@ -534,8 +533,9 @@ class Banana(protocol.Protocol):
     def sendError(self, msg):
         if not self.transport:
             return
-        if len(msg) > SIZE_LIMIT:
-            msg = msg[:SIZE_LIMIT-10] + "..."
+        if len(msg) > self.sizeLimit:
+            msg = msg[:self.sizeLimit-10] + "..."
+        msg = msg.encode('utf8', 'replace')
         int2b128(len(msg), self.transport.write)
         self.transport.write(ERROR)
         self.transport.write(msg)
@@ -576,7 +576,7 @@ class Banana(protocol.Protocol):
     disconnectTimer = None
 
     def initReceive(self):
-        self.inOpen = False # set during the Index Phase of an OPEN sequence
+        self.inOpen   = False # set during the Index Phase of an OPEN sequence
         self.opentype = [] # accumulates Index Tokens
 
         # to pre-negotiate, set the negotiation parameters and set
@@ -618,15 +618,16 @@ class Banana(protocol.Protocol):
                 return obj
         raise ValueError("dangling reference '%d'" % count)
 
-
     def replaceIncomingVocabulary(self, vocabDict):
         # maps small integer to string, should be called in response to a
         # OPEN(set-vocab) sequence.
         self.incomingVocabulary = vocabDict
 
-    def addIncomingVocabulary(self, key, value):
+    def addIncomingVocabulary(self, index, value):
         # called in response to an OPEN(add-vocab) sequence
-        self.incomingVocabulary[key] = value
+        assert type(index) is int,   type(index)
+        assert type(value) is bytes, type(value)
+        self.incomingVocabulary[index] = value
 
     def dataReceived(self, chunk):
         if self.connectionAbandoned:
@@ -641,11 +642,10 @@ class Banana(protocol.Protocol):
                 e.where = self.describeReceive()
                 msg = str(e) # send them the text of the error
             else:
-                msg = ("exception while processing data, more "
-                       "information in the logfiles")
+                msg = 'exception while processing data, more information in the logfiles'
                 if not self.logReceiveErrors:
-                    msg += ", except that self.logReceiveErrors=False"
-                    msg += ", sucks to be you"
+                    msg += ', except that self.logReceiveErrors=False'
+                    msg += ', sucks to be you'
             self.sendError(msg)
             self.connectionAbandoned = True
             self.reportReceiveError(Failure())
@@ -704,10 +704,10 @@ class Banana(protocol.Protocol):
             # exception in a way that doesn't make trial flunk the test
             log.msg(f.getBriefTraceback())
 
-
     def handleData(self, chunk):
         # buffer, assemble into tokens
         # call self.receiveToken(token) with each
+
         if self.skipBytes:
             if len(chunk) <= self.skipBytes:
                 # skip the whole chunk
@@ -716,49 +716,52 @@ class Banana(protocol.Protocol):
             # skip part of the chunk, and stop skipping
             chunk = chunk[self.skipBytes:]
             self.skipBytes = 0
+
         self.buffer.append(chunk)
 
         # Loop through the available input data, extracting one token per
         # pass.
 
-        while len(self.buffer):
-            first65 = self.buffer.popleft(65)
+        while self.buffer:
+            first65 = self.buffer.popleft(self.prefixLimit + 1)
             pos = 0
+
             for ch in first65:
-                if ch >= HIGH_BIT_SET:
+                if HIGH_BIT_SET <= ch:
                     break
-                pos = pos + 1
-                if pos > 64:
+
+                pos += 1
+
+                if self.prefixLimit < pos:
                     # drop the connection. We log more of the buffer, but not
-                    # all of it, to make it harder for someone to spam our
-                    # logs.
-                    s = first65 + self.buffer.popleft(200)
-                    raise BananaError("token prefix is limited to 64 bytes: "
-                                      "but got %r" % s)
+                    # all of it, to make it harder for someone to spam our logs
+                    dump = first65 + self.buffer.popleft(200)
+                    raise BananaError('token prefix is limited to {:d} bytes: but got {!r}'\
+                        .format(self.prefixLimit, dump))
             else:
                 # we've run out of buffer without seeing the high bit, which
                 # means we're still waiting for header to finish
                 self.buffer.appendleft(first65)
                 return
-            assert pos <= 64
+
+            assert pos <= self.prefixLimit, (pos, self.prefixLimit)
 
             # At this point, the header and type byte have been received.
             # The body may or may not be complete.
 
-            typebyte = first65[pos]
-            if pos:
-                header = b1282int(first65[:pos])
-            else:
-                header = 0
+            typebyte = first65[pos:pos+1]
+            header   = b1282int(first65[:pos]) if pos else 0
 
             # rejected is set as soon as a violation is detected. It
             # indicates that this single token will be rejected.
 
             rejected = False
+
             if self.discardCount:
                 rejected = True
 
             wasInOpen = self.inOpen
+
             if typebyte == OPEN:
                 self.inboundObjectCount = self.objectCounter
                 self.objectCounter += 1
@@ -782,8 +785,7 @@ class Banana(protocol.Protocol):
             # determine if this token will be accepted, and if so, how large
             # it is allowed to be (for STRING and LONGINT/LONGNEG)
 
-            if ((not rejected) and
-                (typebyte not in (PING, PONG, ABORT, CLOSE, ERROR))):
+            if not rejected and typebyte not in (PING, PONG, ABORT, CLOSE, ERROR):
                 # PING, PONG, ABORT, CLOSE, and ERROR are always legal. All
                 # others (including OPEN) can be rejected by the schema: for
                 # example, a list of integers would reject STRING, VOCAB, and
@@ -799,23 +801,20 @@ class Banana(protocol.Protocol):
                     # will never be called with ABORT or CLOSE types.
                     top = self.receiveStack[-1]
                     if wasInOpen:
-                        top.openerCheckToken(typebyte, header, self.opentype)
+                        top.openerCheckToken(typebyte, header, tuple(self.opentype))
                     else:
                         top.checkToken(typebyte, header)
                 except Violation:
                     rejected = True
                     f = BananaFailure()
-                    if wasInOpen:
-                        methname = "openerCheckToken"
-                    else:
-                        methname = "checkToken"
+                    methname = 'openerCheckToken' if wasInOpen else 'checkToken'
                     self.handleViolation(f, methname, inOpen=self.inOpen)
                     self.inOpen = False
 
-            if typebyte == ERROR and header > SIZE_LIMIT:
-                # someone is trying to spam us with an ERROR token. Drop
-                # them with extreme prejudice.
-                raise BananaError("oversized ERROR token")
+            if typebyte == ERROR and self.sizeLimit < header:
+                # someone is trying to spam us with an ERROR token
+                # drop them with extreme prejudice
+                raise BananaError('oversized ERROR token')
 
             self.buffer.appendleft(first65[pos+1:])
 
@@ -853,7 +852,7 @@ class Banana(protocol.Protocol):
                         # discarding this new sequence, we don't have to
                         pass
                 else:
-                    self.inOpen = True
+                    self.inOpen   = True
                     self.opentype = []
                 continue
 
@@ -906,68 +905,57 @@ class Banana(protocol.Protocol):
                     return # there is more to come
 
             elif typebyte == LIST:
-                raise BananaError("oldbanana peer detected, " +
-                                  "compatibility code not yet written")
+                raise BananaError("oldbanana peer detected, compatibility code not yet written")
                 #listStack.append((header, []))
 
-            elif typebyte == STRING:
-                strlen = header
-                if len(self.buffer) >= strlen:
-                    # the whole string is available
-                    obj = self.buffer.popleft(strlen)
-                    # although it might be rejected
-                else:
-                    # there is more to come
-                    if rejected:
-                        # drop all we have and note how much more should be
-                        # dropped
-                        if self.debugReceive:
-                            print("DROPPED some string bits")
-                        self.skipBytes = strlen - len(self.buffer)
-                        self.buffer.clear()
-                    else:
-                        self.buffer.appendleft(first65[:pos+1])
-                    return
-
             elif typebyte == INT:
-                obj = int(header)
-            elif typebyte == NEG:
-                # -2**31 is too large for a positive int, so go through
-                # LongType first
-                obj = int(-long(header))
-            elif typebyte == LONGINT or typebyte == LONGNEG:
-                strlen = header
-                if len(self.buffer) >= strlen:
-                    # the whole number is available
-                    obj = bytes_to_long(self.buffer.popleft(strlen))
-                    if typebyte == LONGNEG:
-                        obj = -obj
-                    # although it might be rejected
-                else:
-                    # there is more to come
-                    if rejected:
-                        # drop all we have and note how much more should be
-                        # dropped
-                        self.skipBytes = strlen - len(self.buffer)
-                        self.buffer.clear()
-                    else:
-                        self.buffer.appendleft(first65[:pos+1])
-                    return
+                obj = header
 
-            elif typebyte == VOCAB:
-                obj = self.incomingVocabulary[header]
-                # TODO: bail if expanded string is too big
-                # this actually means doing self.checkToken(VOCAB, len(obj))
-                # but we have to make sure we handle the rejection properly
+            elif typebyte == NEG:
+                obj = -header
 
             elif typebyte == FLOAT:
-                if len(self.buffer) >= 8:
-                    obj = struct.unpack("!d", self.buffer.popleft(8))[0]
+                if struct_float.size <= len(self.buffer):
+                    obj = struct_float.unpack(self.buffer.popleft(struct_float.size))[0]
                 else:
                     # this case is easier than STRING, because it is only 8
                     # bytes. We don't bother skipping anything.
                     self.buffer.appendleft(first65[:pos+1])
                     return
+
+            elif typebyte in (BYTES, STRING):
+                size = header
+
+                if self.sizeLimit < size:
+                    raise BananaError('Security precaution: Bytes too long')
+
+                if size <= len(self.buffer):
+                    # the whole string is available
+                    obj = self.buffer.popleft(size)
+                    if typebyte == STRING:
+                        obj = obj.decode('utf8')
+                    # although it might be rejected
+
+                else:
+                    # there is more to come
+                    if rejected:
+                        # drop all we have and note how much more should be dropped
+                        if self.debugReceive:
+                            print('DROPPED some string bits')
+                        self.skipBytes = size - len(self.buffer)
+                        self.buffer.clear()
+                    else:
+                        self.buffer.appendleft(first65[:pos+1])
+                    return
+
+            elif typebyte == BVOCAB:
+                obj = self.incomingVocabulary[header]
+                # TODO: bail if expanded string is too big
+                # this actually means doing self.checkToken(VOCAB, len(obj))
+                # but we have to make sure we handle the rejection properly
+
+            elif typebyte == SVOCAB:
+                obj = self.incomingVocabulary[header].decode('utf8')
 
             elif typebyte == PING:
                 self.sendPONG(header)
@@ -1000,12 +988,14 @@ class Banana(protocol.Protocol):
         # loop, and the loop exit condition is 'while len(self.buffer)'
         self.buffer.clear()
 
-
     def handleOpen(self, openCount, objectCount, indexToken):
         self.opentype.append(indexToken)
+
         opentype = tuple(self.opentype)
+
         if self.debugReceive:
             print("handleOpen(%d,%d,%s)" % (openCount, objectCount, indexToken))
+
         top = self.receiveStack[-1]
         try:
             # obtain a new Unslicer to handle the object
@@ -1025,11 +1015,13 @@ class Banana(protocol.Protocol):
             return
 
         assert tokens.IUnslicer.providedBy(child), "child is %s" % child
+
         self.inOpen = False
         child.protocol = self
         child.openCount = openCount
         child.parent = top
         self.receiveStack.append(child)
+
         try:
             child.start(objectCount)
         except Violation:
@@ -1041,9 +1033,13 @@ class Banana(protocol.Protocol):
 
     def handleToken(self, token, ready_deferred=None):
         top = self.receiveStack[-1]
-        if self.debugReceive: print("handleToken(%s)" % (token,))
+
+        if self.debugReceive:
+            print("handleToken(%s)" % (token,))
+
         if ready_deferred:
             assert isinstance(ready_deferred, defer.Deferred)
+
         try:
             top.receiveChild(token, ready_deferred)
         except Violation:
@@ -1108,8 +1104,7 @@ class Banana(protocol.Protocol):
         f.value.setLocation(where)
 
         if self.debugReceive:
-            print(" handleViolation-%s (inOpen=%s, inClose=%s): %s" \
-                  % (methname, inOpen, inClose, f))
+            print(" handleViolation-%s (inOpen=%s, inClose=%s): %s" % (methname, inOpen, inClose, f))
 
         assert isinstance(f, BananaFailure)
 
@@ -1127,7 +1122,9 @@ class Banana(protocol.Protocol):
             # things like PB, which may want to errback the current request.
             if self.debugReceive:
                 print(" reportViolation to %s" % self.receiveStack[-1])
+
             f = self.receiveStack[-1].reportViolation(f)
+
             if not f:
                 # they absorbed the failure
                 if self.debugReceive:
@@ -1137,13 +1134,13 @@ class Banana(protocol.Protocol):
             # the old top wants to propagate it upwards
             if self.debugReceive:
                 print("  popping %s" % self.receiveStack[-1])
+
             if not inClose:
                 self.discardCount += 1
                 if self.debugReceive:
-                    print("  ++discardCount (pop, not inClose), now %d" \
-                          % self.discardCount)
-            inClose = False
+                    print("  ++discardCount (pop, not inClose), now %d" % self.discardCount)
 
+            inClose = False
             old = self.receiveStack.pop()
 
             try:
@@ -1156,17 +1153,14 @@ class Banana(protocol.Protocol):
             if not self.receiveStack:
                 # now there's nobody left to create new Unslicers, so we
                 # must drop the connection
-                why = "Oh my god, you killed the RootUnslicer! " + \
-                      "You bastard!!"
+                why = 'Oh my god, you killed the RootUnslicer! You bastard!!'
                 raise BananaError(why)
 
             # now we loop until someone absorbs the failure
 
-
     def handleError(self, msg):
         log.msg("got banana ERROR from remote side: %s" % msg)
         self.transport.loseConnection()
-
 
     def describeReceive(self):
         where = []
@@ -1187,6 +1181,7 @@ class Banana(protocol.Protocol):
 
     def reportViolation(self, why):
         return why
+
 
 # Note: when changing this class, you should un-comment all the lines that say
 # "assert self._assert_invariants()".

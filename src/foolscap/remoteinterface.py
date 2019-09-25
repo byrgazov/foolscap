@@ -8,6 +8,7 @@ from foolscap.tokens import Violation, InvalidRemoteInterface
 from foolscap.schema import addToConstraintTypeMap
 from foolscap import ipb
 
+
 class RemoteInterfaceClass(interface.InterfaceClass):
     """This metaclass lets RemoteInterfaces be a lot like Interfaces. The
     methods are parsed differently (PB needs more information from them than
@@ -30,8 +31,7 @@ class RemoteInterfaceClass(interface.InterfaceClass):
 
     def __init__(self, iname, bases=(), attrs=None, __module__=None):
         if attrs is None:
-            interface.InterfaceClass.__init__(self, iname, bases, attrs,
-                                              __module__)
+            interface.InterfaceClass.__init__(self, iname, bases, attrs, __module__)
             return
 
         # parse (and remove) the attributes that make this a RemoteInterface
@@ -41,8 +41,7 @@ class RemoteInterfaceClass(interface.InterfaceClass):
             raise
 
         # now let the normal InterfaceClass do its thing
-        interface.InterfaceClass.__init__(self, iname, bases, attrs,
-                                          __module__)
+        interface.InterfaceClass.__init__(self, iname, bases, attrs, __module__)
 
         # now add all the remote methods that InterfaceClass would have
         # complained about. This is really gross, and it really makes me
@@ -63,8 +62,7 @@ class RemoteInterfaceClass(interface.InterfaceClass):
 
     def _parseRemoteInterface(self, iname, attrs):
         remote_attrs = {}
-
-        remote_name = attrs.get("__remote_name__", iname)
+        remote_name  = attrs.get("__remote_name__", iname)
 
         # and see if there is a __remote_name__ . We delete it because
         # InterfaceClass doesn't like arbitrary attributes
@@ -92,9 +90,8 @@ class RemoteInterfaceClass(interface.InterfaceClass):
 
         return remote_name, remote_attrs
 
-RemoteInterface = RemoteInterfaceClass("RemoteInterface",
-                                       __module__="pb.flavors")
 
+RemoteInterface = RemoteInterfaceClass("RemoteInterface", __module__="pb.flavors")
 
 
 def getRemoteInterface(obj):
@@ -110,10 +107,11 @@ def getRemoteInterface(obj):
                              % (obj, ilist))
     if ilist:
         return ilist[0]
-    return None
+
 
 class DuplicateRemoteInterfaceError(Exception):
     pass
+
 
 RemoteInterfaceRegistry = {}
 def registerRemoteInterface(iface, name=None):
@@ -126,12 +124,13 @@ def registerRemoteInterface(iface, name=None):
         raise DuplicateRemoteInterfaceError(msg)
     RemoteInterfaceRegistry[name] = iface
 
+
 def getRemoteInterfaceByName(iname):
     return RemoteInterfaceRegistry.get(iname)
 
 
 @implementer(IRemoteMethodConstraint)
-class RemoteMethodSchema(object):
+class RemoteMethodSchema:
     """
     This is a constraint for a single remotely-invokable method. It gets to
     require, deny, or impose further constraints upon a set of named
@@ -195,11 +194,14 @@ class RemoteMethodSchema(object):
         # does nothing but returns the appropriate return type
 
         names, _, _, typeList = inspect.getargspec(method)
+
         if names and names[0] == 'self':
             why = "RemoteInterface methods should not have 'self' in their argument list"
             raise InvalidRemoteInterface(why)
+
         if not names:
             typeList = []
+
         # 'def foo(oops)' results in typeList==None
         if typeList is None or len(names) != len(typeList):
             # TODO: relax this, use schema=Any for the args that don't have
@@ -209,11 +211,12 @@ class RemoteMethodSchema(object):
             #  def foo(a=Any, b=int): return None
             why = "RemoteInterface methods must have default values for all their arguments"
             raise InvalidRemoteInterface(why)
+
         self.argumentNames = names
         self.argConstraints = {}
         self.required = []
-        for i in range(len(names)):
-            argname = names[i]
+
+        for i, argname in enumerate(names):
             constraint = typeList[i]
             if not isinstance(constraint, Optional):
                 self.required.append(argname)
@@ -295,8 +298,9 @@ class RemoteMethodSchema(object):
             # location appropriately: they have more information than we do.
             self.responseConstraint.checkObject(results, inbound)
 
+
 @implementer(IRemoteMethodConstraint)
-class UnconstrainedMethod(object):
+class UnconstrainedMethod:
     """I am a method constraint that accepts any arguments and any return
     value.
 
@@ -360,7 +364,7 @@ class RemoteInterfaceConstraint(OpenerConstraint):
     we want this behavior or not.
     """
 
-    opentypes = [("my-reference",), ("their-reference",)]
+    opentypes = [(b"my-reference",), (b"their-reference",)]
     name = "RemoteInterfaceConstraint"
 
     def __init__(self, interface):

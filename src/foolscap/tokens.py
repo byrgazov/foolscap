@@ -5,46 +5,57 @@ from zope.interface import Attribute, Interface
 # delimiter characters.
 LIST     = b'\x80' # old
 INT      = b'\x81'
-STRING   = b'\x82'
-NEG      = b'\x83'
-FLOAT    = b'\x84'
-# "optional" -- these might be refused by a low-level implementation.
-LONGINT  = b'\x85' # old
-LONGNEG  = b'\x86' # old
-# really optional; this is is part of the 'pb' vocabulary
-VOCAB    = b'\x87'
+NEG      = b'\x82'
+FLOAT    = b'\x83'
+
 # newbanana tokens
-OPEN     = b'\x88'
-CLOSE    = b'\x89'
-ABORT    = b'\x8A'
-ERROR    = b'\x8D'
-PING     = b'\x8E'
-PONG     = b'\x8F'
+OPEN     = b'\x87'
+CLOSE    = b'\x88'
+ABORT    = b'\x89'
+ERROR    = b'\x8a'
+PING     = b'\x8b'
+PONG     = b'\x8c'
+
+# bwbanana tokens
+BYTES  = b'\x90'
+STRING = b'\x91'
+BVOCAB = b'\x92'
+SVOCAB = b'\x93'
+FORMAT = b'\x94'
+NONE   = b'\x95'
+TRUE   = b'\x96'
+FALSE  = b'\x97'
 
 tokenNames = {
-    LIST: "LIST",
-    INT: "INT",
-    STRING: "STRING",
-    NEG: "NEG",
-    FLOAT: "FLOAT",
-    LONGINT: "LONGINT",
-    LONGNEG: "LONGNEG",
-    VOCAB: "VOCAB",
-    OPEN: "OPEN",
-    CLOSE: "CLOSE",
-    ABORT: "ABORT",
-    ERROR: "ERROR",
-    PING: "PING",
-    PONG: "PONG",
-    }
+    ABORT  : 'ABORT',
+    CLOSE  : 'CLOSE',
+    ERROR  : 'ERROR',
+    FLOAT  : 'FLOAT',
+    INT    : 'INT',
+    LIST   : 'LIST',
+    NEG    : 'NEG',
+    OPEN   : 'OPEN',
+    PING   : 'PING',
+    PONG   : 'PONG',
 
-SIZE_LIMIT = 1000 # default limit on the body length of long tokens (STRING,
-                  # LONGINT, LONGNEG, ERROR)
+    BYTES  : 'BYTES',
+    STRING : 'STRING',
+    BVOCAB : 'BVOCAB',
+    SVOCAB : 'SVOCAB',
+}
+
+
+#SIZE_LIMIT = 1000  # default limit on the body length of long tokens (STRING, ERROR)
+SIZE_LIMIT = 640 * 1024   # 640k is all you'll ever need :-)
+
 
 class InvalidRemoteInterface(Exception):
     pass
+
+
 class UnknownSchemaType(Exception):
     pass
+
 
 class Violation(Exception):
     """This exception is raised in response to a schema violation. It
@@ -57,12 +68,20 @@ class Violation(Exception):
 
     """.where: this string describes which node of the object graph was
     being handled when the exception took place."""
-    where = ""
+
+    where = ''
+
+    def __str__(self):
+        if self.where:
+            return 'Violation (%s): %s' % (self.where, self.args)
+        return 'Violation: %s' % (self.args,)
 
     def setLocation(self, where):
         self.where = where
+
     def getLocation(self):
         return self.where
+
     def prependLocation(self, prefix):
         if self.where:
             self.where = prefix + " " + self.where
@@ -74,21 +93,18 @@ class Violation(Exception):
         else:
             self.where = suffix
 
-    def __str__(self):
-        if self.where:
-            return "Violation (%s): %s" % (self.where, self.args)
-        else:
-            return "Violation: %s" % (self.args,)
 
 class RemoteException(Exception):
     """When the Tub is in expose-remote-exception-types=False mode, this
     exception is raised in response to any remote exception. It wraps a
     CopiedFailure, which can be examined by callers who want to know more
     than the fact that something failed on the remote end."""
+
     def __init__(self, failure):
         self.failure = failure
+
     def __str__(self):
-        return "<RemoteException around '%s'>" % str(self.failure)
+        return '<RemoteException around "%s">' % str(self.failure)
 
 
 class BananaError(Exception):
@@ -102,39 +118,48 @@ class BananaError(Exception):
 
     def __str__(self):
         if self.where:
-            return "BananaError(in %s): %s" % (self.where, self.args)
-        else:
-            return "BananaError: %s" % (self.args,)
+            return 'BananaError(in %s): %s' % (self.where, self.args)
+        return 'BananaError: %s' % (self.args,)
+
 
 class NegotiationError(Exception):
     pass
+
+
 class DuplicateConnection(NegotiationError):
     pass
+
 
 class RemoteNegotiationError(Exception):
     """The other end hung up on us because they had a NegotiationError on
     their side."""
-    pass
+
 
 class PBError(Exception):
     pass
+
 
 class BananaFailure(Failure):
     """This is a marker subclass of Failure, to let Unslicer.receiveChild
     distinguish between an unserialized Failure instance and a a failure in
     a child Unslicer"""
-    pass
+
 
 class WrongTubIdError(Exception):
     """getReference(furlFile=) used a FURL with a different TubID"""
+
+
 class WrongNameError(Exception):
     """getReference(furlFule=) used a FURL with a different name"""
+
 
 class NoLocationError(Exception):
     """This Tub has no location set, so we cannot make references to it."""
 
+
 class NoLocationHintsError(Exception):
     """We cannot make a connection without some location hints"""
+
 
 class ISlicer(Interface):
     """I know how to slice objects into tokens."""
@@ -224,12 +249,15 @@ This attribute is read when each child Slicer is started.""")
         obtained from every slicer in the stack, and joined to describe
         where any problems occurred."""
 
+
 class IRootSlicer(Interface):
     def allowStreaming(streamable):
         """Specify whether or not child Slicers will be allowed to stream."""
+
     def connectionLost(why):
         """Called when the transport is closed. The RootSlicer may choose to
         abandon objects being sent here."""
+
 
 class IUnslicer(Interface):
     # .parent
@@ -278,7 +306,7 @@ class IUnslicer(Interface):
         """Check to see if the given token is acceptable (does it conform to
         the constraint?). It will not be asked about ABORT or CLOSE tokens,
         but it *will* be asked about OPEN. It should enfore a length limit
-        for long tokens (STRING and LONGINT/LONGNEG types). If STRING is
+        for long tokens (STRING types). If STRING is
         acceptable, then VOCAB should be too. It should return None if the
         token and the size are acceptable. Should raise Violation if the
         schema indiates the token is not acceptable. Should raise
@@ -308,8 +336,7 @@ class IUnslicer(Interface):
         constraint on the child unslicer, if any.
         """
 
-    def receiveChild(childobject,
-                     ready_deferred):
+    def receiveChild(childobject, ready_deferred):
         """'childobject' is being handed to this unslicer. It may be a
         primitive type (number or string), or a composite type produced by
         another Unslicer. It might also be a Deferred, which indicates that
