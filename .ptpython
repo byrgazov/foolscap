@@ -1,0 +1,113 @@
+# -*- coding: utf-8 -*-
+
+import sys
+
+import pygments.token
+
+
+IMPORTS = {
+	'collections': 'C',
+	'funcy'      : 'F',
+	'itertools'  : 'I',
+	'operator'   : 'O',
+	'string'     : 'S',
+	'zope.interface': '_zi',
+	'zope.component': '_zc',
+	'zope.proxy'    : '_zp',
+	'zope.security' : '_zs',
+}
+
+IMPORTS.update(dict.fromkeys('sys os time datetime pytz urllib2 urlparse'.split()))
+
+try:
+	basestring
+except NameError:
+	basestring = str
+
+
+def configure(repl):
+	from ptpython.layout import CompletionVisualisation
+	repl.completion_visualisation = CompletionVisualisation.MULTI_COLUMN
+	repl.confirm_exit   = False
+	repl.show_signature = True
+	repl.show_docstring = True
+	repl.enable_input_validation = False
+	repl.install_code_colorscheme('custom', code_colorscheme())
+	repl.use_code_colorscheme('custom')
+#	repl.install_ui_colorscheme('custom', custom_ui_colorscheme)
+#	repl.use_ui_colorscheme('custom')
+
+	for modname, synonyms in IMPORTS.items():
+		try:
+			__import__(modname)
+			if isinstance(synonyms, basestring):
+				synonyms = synonyms.split()
+			for attr in [modname] + (synonyms or []):
+				repl.get_globals()[attr] = sys.modules[modname]
+				repl.get_locals()[attr]  = sys.modules[modname]
+		except ImportError:
+			pass
+
+
+#custom_ui_colorscheme = {
+#	pygments.token.Token.Layout.Prompt : 'bg:#eeeeff #000000 bold',
+#	pygments.token.Token.Toolbar.Status: 'bg:#ff0000 #000000'
+#}
+
+
+def code_colorscheme():
+	from pygments.token import Keyword, Name, Comment, String, Error
+	from pygments.token import Number, Operator, Generic, Whitespace
+	from pygments.token import Token
+
+	return {
+		Token:              '#aaaaaa',
+#		Whitespace:         '#aaaaaa',
+
+		Comment:            'italic #00ffff',
+#		Comment.Preproc:    'noitalic #009999',
+#		Comment.Special:    'bold',
+
+		Keyword:            'bold #00aaaa',
+#		Keyword.Pseudo:     'nobold',
+		Keyword.Type:       '#007788',
+
+		Operator:           '#00aa00',
+		Operator.Word:      '#00aaaa',
+
+		Name.Builtin:       'bold #bbbb44',
+		Name.Function:      'bold #ffffff',
+		Name.Class:         'bold #ffffff',
+		Name.Namespace:     'bold #aaaaaa',
+		Name.Exception:     'bold #cc0000',
+		Name.Variable:      '#003333',
+		Name.Constant:      '#336600',
+		Name.Label:         '#9999FF',
+		Name.Entity:        'bold #999999',
+		Name.Attribute:     '#330099',
+		Name.Tag:           'bold #330099',
+		Name.Decorator:     'bold #cc66cc',
+
+		String:             '#00f000',
+		String.Doc:         '#00ffff',  # """ & '''
+#		String.Interpol:    '#AA0000',
+#		String.Escape:      'bold #CC3300',
+#		String.Regex:       '#33AAAA',
+#		String.Symbol:      '#FFCC33',
+#		String.Other:       '#CC3300',
+
+		Number:             '#ffffff',
+
+		Generic.Heading:    'bold #003300',
+		Generic.Subheading: 'bold #003300',
+		Generic.Deleted:    'border:#CC0000 bg:#FFCCCC',
+		Generic.Inserted:   'border:#00CC00 bg:#CCFFCC',
+		Generic.Error:      '#FF0000',
+		Generic.Emph:       'italic',
+		Generic.Strong:     'bold',
+#		Generic.Prompt:     '#aaaaaa',
+		Generic.Output:     '#AAAAAA',
+		Generic.Traceback:  '#99CC66',
+
+		Error:              'bg:#FFAAAA #AA0000'
+	}

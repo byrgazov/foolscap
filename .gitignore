@@ -2,11 +2,18 @@
 *.pyc
 __pycache__
 
+/bin/
 /build/
 /dist/
+/include/
+/lib/
+/share/
 /src/foolscap.egg-info/
 /_trial_temp*/
-/_trial_temp.lock
-/.coverage
-/coverage.xml
+/.eggs/
+/.eggs-develop/
 /.tox/
+/.coverage
+/.installed.cfg
+/_trial_temp.lock
+/coverage.xml

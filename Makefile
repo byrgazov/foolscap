@@ -8,11 +8,10 @@ TEST=foolscap
 build:
 	$(PYTHON) setup.py build
 
-test:
-	$(TRIAL) $(TEST)
-
-test-poll:
-	$(MAKE) test TRIAL="trial -r poll"
+#test:
+#	$(TRIAL) $(TEST)
+#test-poll:
+#	$(MAKE) test TRIAL="trial -r poll"
 
 api-docs:
 	rm -rf doc/api

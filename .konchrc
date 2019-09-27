@@ -1,0 +1,47 @@
+# -*- coding: utf-8 -*-
+
+import os
+import functools as F
+
+import konch
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+konch.config({
+	'shell': 'ptpython',
+	'context': {
+		'speak': konch.speak
+	}
+})
+
+
+def setup():
+	konch.SHELL_MAP['ptpython'] = PtPythonShell
+
+
+def teardown():
+	pass
+
+
+class PtPythonShell(konch.Shell):
+	def __init__(self, ptpy_config='.ptpython', *args, **kwargs):
+		self.ptpy_config = os.path.join(HERE, ptpy_config)
+		super().__init__(*args, **kwargs)
+
+	def check_availability(self):
+		try:
+			import ptpython  # flake8: noqa
+		except ImportError:
+			raise konch.ShellNotAvailableError('PtPython shell not available.')
+
+	def start(self):
+		try:
+			from ptpython.repl import run_config, embed
+		except ImportError:
+			raise konch.ShellNotAvailableError('PtPython shell not available.')
+
+		print(self.banner)
+
+		embed(globals=self.context, configure=F.partial(run_config, config_file=self.ptpy_config))
