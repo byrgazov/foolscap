@@ -20,12 +20,14 @@ from foolscap.slicers.root import RootSlicer, RootUnslicer, ScopedRootSlicer
 from foolscap.eventual import eventually
 from foolscap.logging import log
 
+
 LOST_CONNECTION_ERRORS = [error.ConnectionLost, error.ConnectionDone]
 try:
     from OpenSSL import SSL
     LOST_CONNECTION_ERRORS.append(SSL.Error)
 except ImportError:
     pass
+
 
 PBTopRegistry = {
     (b'call',)  : call.CallUnslicer,
@@ -42,13 +44,23 @@ PBOpenRegistry = {
 }
 
 
+class PBRootSlicer(RootSlicer):
+    slicerTable = {
+        types.MethodType  : referenceable.CallableSlicer,
+        types.FunctionType: referenceable.CallableSlicer}
+
+    def registerRefID(self, refid, obj):
+        # references are never Broker-scoped: they're always scoped more
+        # narrowly, by the CallSlicer or the AnswerSlicer.
+        assert 0
+
+
 class PBRootUnslicer(RootUnslicer):
     # topRegistries defines what objects are allowed at the top-level
-    topRegistries = [PBTopRegistry]
-    # openRegistries defines what objects are allowed at the second level and
-    # below
+    topRegistries  = [PBTopRegistry]
+    # openRegistries defines what objects are allowed at the second level and below
     openRegistries = [slicer.UnslicerRegistry, PBOpenRegistry]
-    logViolations = False
+    logViolations  = False
 
     def checkToken(self, typebyte, size):
         if typebyte != tokens.OPEN:
@@ -92,17 +104,6 @@ class PBRootUnslicer(RootUnslicer):
     def receiveChild(self, token, ready_deferred):
         if isinstance(token, call.InboundDelivery):
             self.broker.scheduleCall(token, ready_deferred)
-
-
-class PBRootSlicer(RootSlicer):
-    slicerTable = {
-        types.MethodType  : referenceable.CallableSlicer,
-        types.FunctionType: referenceable.CallableSlicer}
-
-    def registerRefID(self, refid, obj):
-        # references are never Broker-scoped: they're always scoped more
-        # narrowly, by the CallSlicer or the AnswerSlicer.
-        assert 0
 
 
 class RIBroker(remoteinterface.RemoteInterface):
@@ -544,26 +545,32 @@ class Broker(banana.Banana, referenceable.Referenceable):
         return None
 
     def scheduleCall(self, delivery, ready_deferred):
-        self.inboundDeliveryQueue.append( (delivery,ready_deferred) )
+        self.inboundDeliveryQueue.append((delivery, ready_deferred))
         eventually(self.doNextCall)
 
     def doNextCall(self):
         if self.disconnected:
             return
+
         if self._waiting_for_call_to_be_ready:
             return
+
         if not self.inboundDeliveryQueue:
             return
+
         delivery, ready_deferred = self.inboundDeliveryQueue.pop(0)
         self._waiting_for_call_to_be_ready = True
+
         if not ready_deferred:
             ready_deferred = defer.succeed(None)
+
         d = ready_deferred
 
         def _ready(res):
             self._waiting_for_call_to_be_ready = False
             eventually(self.doNextCall)
             return res
+
         d.addBoth(_ready)
 
         # at this point, the Deferred chain for this one delivery runs
@@ -577,7 +584,6 @@ class Broker(banana.Banana, referenceable.Referenceable):
         d.addCallback(self._callFinished, delivery)
         d.addErrback(self.callFailed, delivery.reqID, delivery)
         d.addErrback(log.err)
-        return None
 
     def _doCall(self, delivery):
         # our ordering rules require that the order in which each

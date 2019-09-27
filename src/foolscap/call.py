@@ -295,65 +295,66 @@ class ArgumentUnslicer(slicer.ScopedUnslicer):
             # this token is the number of positional arguments
             assert isinstance(token, int)
             assert ready_deferred is None
+
             self.numargs = token
+
             if self.numargs:
                 ms = self.methodSchema
                 if ms:
-                    accept, self.argConstraint = \
-                            ms.getPositionalArgConstraint(0)
+                    accept, self.argConstraint = ms.getPositionalArgConstraint(0)
                     assert accept
-            return
-
-        if len(self.args) < self.numargs:
-            # this token is a positional argument
-            argvalue = token
-            argpos = len(self.args)
-            self.args.append(argvalue)
-            if isinstance(argvalue, defer.Deferred):
-                # this may occur if the child is a gift which has not
-                # resolved yet.
-                self.num_unreferenceable_children += 1
-                argvalue.addCallback(self.updateChild, argpos)
-            if ready_deferred:
-                if self.debug:
-                    log.msg("%s.receiveChild got an unready posarg" % self)
-                self._ready_deferreds.append(ready_deferred)
+        else:
             if len(self.args) < self.numargs:
-                # more to come
-                ms = self.methodSchema
-                if ms:
-                    nextargnum = len(self.args)
-                    accept, self.argConstraint = \
-                            ms.getPositionalArgConstraint(nextargnum)
-                    assert accept
-            return
+                # this token is a positional argument
+                argvalue = token
+                argpos = len(self.args)
+                self.args.append(argvalue)
 
-        if self.argname is None:
-            # this token is the name of a keyword argument
-            assert ready_deferred is None
-            self.argname = token
-            # if the argname is invalid, this may raise Violation
-            ms = self.methodSchema
-            if ms:
-                accept, self.argConstraint = \
-                        ms.getKeywordArgConstraint(self.argname,
-                                                   self.numargs,
-                                                   list(self.kwargs.keys()))
-                assert accept
-            return
+                if isinstance(argvalue, defer.Deferred):
+                    # this may occur if the child is a gift which has not
+                    # resolved yet.
+                    self.num_unreferenceable_children += 1
+                    argvalue.addCallback(self.updateChild, argpos)
 
-        # this token is the value of a keyword argument
-        argvalue = token
-        self.kwargs[self.argname] = argvalue
-        if isinstance(argvalue, defer.Deferred):
-            self.num_unreferenceable_children += 1
-            argvalue.addCallback(self.updateChild, self.argname)
-        if ready_deferred:
-            if self.debug:
-                log.msg("%s.receiveChild got an unready kwarg" % self)
-            self._ready_deferreds.append(ready_deferred)
-        self.argname = None
-        return
+                if ready_deferred:
+                    if self.debug:
+                        log.msg("%s.receiveChild got an unready posarg" % self)
+                    self._ready_deferreds.append(ready_deferred)
+
+                if len(self.args) < self.numargs:
+                    # more to come
+                    ms = self.methodSchema
+                    if ms:
+                        nextargnum = len(self.args)
+                        accept, self.argConstraint = \
+                                ms.getPositionalArgConstraint(nextargnum)
+                        assert accept
+            else:
+                if self.argname is None:
+                    # this token is the name of a keyword argument
+                    assert ready_deferred is None
+                    self.argname = token
+                    # if the argname is invalid, this may raise Violation
+                    ms = self.methodSchema
+                    if ms:
+                        accept, self.argConstraint = ms.getKeywordArgConstraint(
+                            self.argname, self.numargs, list(self.kwargs.keys()))
+                        assert accept
+                else:
+                    # this token is the value of a keyword argument
+                    argvalue = token
+                    self.kwargs[self.argname] = argvalue
+
+                    if isinstance(argvalue, defer.Deferred):
+                        self.num_unreferenceable_children += 1
+                        argvalue.addCallback(self.updateChild, self.argname)
+
+                    if ready_deferred:
+                        if self.debug:
+                            log.msg("%s.receiveChild got an unready kwarg" % self)
+                        self._ready_deferreds.append(ready_deferred)
+
+                    self.argname = None
 
     def updateChild(self, obj, which):
         # one of our arguments has just now become referenceable. Normal
@@ -376,25 +377,29 @@ class ArgumentUnslicer(slicer.ScopedUnslicer):
                 self._all_children_are_referenceable_d.callback(None)
         return obj
 
-
     def receiveClose(self):
         if self.debug:
             log.msg("%s.receiveClose: %s %s %s" %
                     (self, self.closed, self.num_unreferenceable_children,
                      len(self._ready_deferreds)))
-        if (self.numargs is None or
-            len(self.args) < self.numargs or
-            self.argname is not None):
+
+        if self.numargs is None or len(self.args) < self.numargs or self.argname is not None:
             raise BananaError("'arguments' sequence ended too early")
+
         self.closed = True
         dl = []
+
         if self.num_unreferenceable_children:
             d = self._all_children_are_referenceable_d = defer.Deferred()
             dl.append(d)
+
         dl.extend(self._ready_deferreds)
+
         ready_deferred = None
+
         if dl:
             ready_deferred = AsyncAND(dl)
+
         return self, ready_deferred
 
     def describe(self):
@@ -550,7 +555,7 @@ class CallUnslicer(slicer.ScopedUnslicer):
 
             return
 
-        if self.stage == 3: # arguments
+        if self.stage == 3:  # arguments
             assert isinstance(token, ArgumentUnslicer)
             self.allargs = token
             # queue the message. It will not be executed until all the
@@ -564,14 +569,17 @@ class CallUnslicer(slicer.ScopedUnslicer):
     def receiveClose(self):
         if self.stage != 4:
             raise BananaError("'call' sequence ended too early")
+
         # time to create the InboundDelivery object so we can queue it
         delivery = InboundDelivery(self.broker, self.reqID, self.obj,
                                    self.interface, self.methodname,
                                    self.methodSchema,
                                    self.allargs)
         ready_deferred = None
+
         if self._ready_deferreds:
             ready_deferred = AsyncAND(self._ready_deferreds)
+
         return delivery, ready_deferred
 
     def describe(self):

@@ -38,7 +38,7 @@ class RootSlicer:
         # could use a table here if you think it'd be faster than an adapter lookup
 
         if self.debug:
-            log.msg("slicerForObject(%s)" % type(obj))
+            log.msg('slicerForObject(%s)' % type(obj))
 
         # do the adapter lookup first, so that registered adapters override
         # UnsafeSlicerTable's InstanceSlicer
@@ -46,7 +46,7 @@ class RootSlicer:
 
         if slicer:
             if self.debug:
-                log.msg("got ISlicer %s" % slicer)
+                log.msg('got ISlicer %s' % slicer)
             return slicer
 
         # zope.interface doesn't do transitive adaptation, which is a shame
@@ -65,18 +65,15 @@ class RootSlicer:
 
         if slicerFactory:
             if self.debug:
-                log.msg(" got slicerFactory %s" % slicerFactory)
+                log.msg(' got slicerFactory %s' % slicerFactory)
             return slicerFactory(obj)
 
-        if issubclass(type(obj), types.InstanceType):
-            name = str(obj.__class__)
-        else:
-            name = str(type(obj))
+        name = str(type(obj))
 
         if self.debug:
-            log.msg("cannot serialize %s (%s)" % (obj, name))
+            log.msg('cannot serialize %s (%s)' % (obj, name))
 
-        raise Violation("cannot serialize %s (%s)" % (obj, name))
+        raise Violation('cannot serialize %s (%s)' % (obj, name))
 
     def __iter__(self):
         return self  # we are our own iterator
@@ -117,16 +114,19 @@ class RootSlicer:
         idle = (len(self.protocol.slicerStack) == 1) and not self.sendQueue
         objectSentDeferred = Deferred()
         self.sendQueue.append((obj, objectSentDeferred))
+
         if idle:
             # wake up
             if self.protocol.debugSend:
                 print(" waking up to send")
+
             if self.producingDeferred:
                 d = self.producingDeferred
                 self.producingDeferred = None
                 # TODO: consider reactor.callLater(0, d.callback, None)
                 # I'm not sure it's actually necessary, though
                 d.callback(None)
+
         return objectSentDeferred
 
     def describe(self):
@@ -152,18 +152,20 @@ class ScopedRootSlicer(RootSlicer):
         self.references = {} # maps id(obj) -> (obj,refid)
 
     def registerRefID(self, refid, obj):
-        self.references[id(obj)] = (obj,refid)
+        self.references[id(obj)] = (obj, refid)
 
     def slicerForObject(self, obj):
         # check for an object which was sent previously or has at least
         # started sending
         obj_refid = self.references.get(id(obj), None)
+
         if obj_refid is not None:
             # we've started to send this object already, so just include a
             # reference to it
             return ReferenceSlicer(obj_refid[1])
+
         # otherwise go upstream so we can serialize the object completely
-        return RootSlicer.slicerForObject(self, obj)
+        return super().slicerForObject(obj)
 
 
 class RootUnslicer(BaseUnslicer):
@@ -196,14 +198,14 @@ class RootUnslicer(BaseUnslicer):
             self.constraint.checkToken(typebyte, size)
 
     def openerCheckToken(self, typebyte, size, opentype):
-        if typebyte == tokens.STRING:
-            if size > self.maxIndexLength:
-                why = "STRING token is too long, %d>%d" % (size, self.maxIndexLength)
-                raise Violation(why)
-        elif typebyte != tokens.SVOCAB:
-            # TODO: hack for testing
-            raise Violation("index token 0x%02x not STRING or SVOCAB" % ord(typebyte))
-            raise BananaError("index token 0x%02x not STRING or SVOCAB" % ord(typebyte))
+        if typebyte == tokens.BYTES:
+            if self.maxIndexLength < size:
+                raise Violation('first opentype BYTES token is too long, {:d} > {:d}'\
+                    .format(size, self.maxIndexLength))
+
+        elif typebyte != tokens.BVOCAB:
+            raise Violation('opentype not <copyable> ({!r}) and index token 0x{:02x} not BYTES or BVOCAB'\
+                .format(opentype, ord(typebyte)))
 
     def open(self, opentype):
         # called (by delegation) by the top Unslicer on the stack, regardless

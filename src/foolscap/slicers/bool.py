@@ -10,11 +10,9 @@ from foolscap.constraint import OpenerConstraint, IntegerConstraint, Any
 class BooleanSlicer(BaseSlicer):
     opentype = (b'boolean',)
     trackReferences = False
+
     def sliceBody(self, streamable, banana):
-        if self.obj:
-            yield 1
-        else:
-            yield 0
+        yield 1 if self.obj else 0
 
 registerAdapter(BooleanSlicer, bool, tokens.ISlicer)
 

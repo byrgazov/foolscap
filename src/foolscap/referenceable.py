@@ -734,19 +734,17 @@ class TheirReferenceUnslicer(slicer.LeafUnslicer):
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, defer.Deferred)
         assert ready_deferred is None
-        if self.state == 0:
-            self.giftID = obj
-            self.state = 1
-        elif self.state == 1:
-            # URL
-            self.url = obj
-            self.state = 2
-        else:
-            raise BananaError("Too many their-reference parameters")
+
+        if   self.state == 0: self.giftID = obj
+        elif self.state == 1: self.url = obj
+        else: raise BananaError('Too many their-reference parameters')
+
+        self.state += 1
 
     def receiveClose(self):
         if self.giftID is None or self.url is None:
             raise BananaError("sequence ended too early")
+
         if self.broker.tub.accept_gifts:
             d = self.broker.tub.getReference(self.url)
             d.addBoth(self.ackGift)
@@ -761,12 +759,13 @@ class TheirReferenceUnslicer(slicer.LeafUnslicer):
         # complete. See to it that we fire the object deferred before we fire
         # the ready_deferred.
 
-        obj_deferred = defer.Deferred()
+        obj_deferred   = defer.Deferred()
         ready_deferred = defer.Deferred()
 
         def _ready(rref):
             obj_deferred.callback(rref)
             ready_deferred.callback(rref)
+
         def _failed(f):
             # if an error in getReference() occurs, log it locally (with
             # priority UNUSUAL), because this end might need to diagnose some
@@ -779,6 +778,7 @@ class TheirReferenceUnslicer(slicer.LeafUnslicer):
             obj_deferred.callback("Place holder for a Gift which failed to "
                                   "resolve: %s" % f)
             ready_deferred.errback(f)
+
         d.addCallbacks(_ready, _failed)
 
         return obj_deferred, ready_deferred

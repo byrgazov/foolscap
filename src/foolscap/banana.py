@@ -19,6 +19,8 @@ from .tokens import SIZE_LIMIT, LIST, INT, NEG, FLOAT, OPEN, CLOSE, ABORT, ERROR
 from .tokens import BYTES, STRING, BVOCAB, SVOCAB
 
 
+STUB = object()
+
 EPSILON = 0.1
 MAXINT  =  2 ** 31 - 1
 MININT  = -2 ** 31
@@ -99,20 +101,22 @@ class Banana(protocol.Protocol):
     def connectionMade(self):
         if self.debugSend:
             print("Banana.connectionMade")
+
         self.initSlicer()
         self.initUnslicer()
+
         if self.keepaliveTimeout is not None:
             self.dataLastReceivedAt = time.time()
-            t = reactor.callLater(self.keepaliveTimeout + EPSILON,
-                                  self.keepaliveTimerFired)
+            t = reactor.callLater(self.keepaliveTimeout + EPSILON, self.keepaliveTimerFired)
             self.keepaliveTimer = t
             self.useKeepalives = True
+
         if self.disconnectTimeout is not None:
             self.dataLastReceivedAt = time.time()
-            t = reactor.callLater(self.disconnectTimeout + EPSILON,
-                                  self.disconnectTimerFired)
+            t = reactor.callLater(self.disconnectTimeout + EPSILON, self.disconnectTimerFired)
             self.disconnectTimer = t
             self.useKeepalives = True
+
         # prime the pump
         self.produce()
 
@@ -155,11 +159,11 @@ class Banana(protocol.Protocol):
 
     def send(self, obj):
         if self.debugSend:
-            print("Banana.send(%s)" % obj)
+            print('Banana.send(%s) / rootSlicer=%r' % (obj, self.rootSlicer))
         return self.rootSlicer.send(obj)
 
     def _slice_error(self, f, s):
-        log.msg("Error in Deferred returned by slicer %s: %s" % (s, f))
+        log.msg('Error in Deferred returned by slicer %s: %s' % (s, f))
         self.sendFailed(f)
 
     def produce(self, dummy=None):
@@ -174,7 +178,7 @@ class Banana(protocol.Protocol):
                 obj = next()
 
                 if self.debugSend:
-                    print(' produce.obj=%s' % (obj,))
+                    print(' produce.obj=%r' % (obj,))
 
                 if isinstance(obj, defer.Deferred):
                     for s, n, o in self.slicerStack:
@@ -320,8 +324,8 @@ class Banana(protocol.Protocol):
         # slicer has been pushed. This check is only useful for .slice
         # methods which are *not* generators.
 
-        itr = iter(slicer.slice(topSlicer.streamable, self))
-        next_itr = itr.__next__
+        itr = slicer.slice(topSlicer.streamable, self)
+        itr = iter(itr).__next__
 
         # we are now committed to sending the OPEN token, meaning that
         # failures after this point will cause an ABORT/CLOSE to be sent
@@ -335,18 +339,21 @@ class Banana(protocol.Protocol):
             # the debug/optional copy in the CLOSE token. Consider ripping
             # this code out if we decide to stop sending that copy.
 
-        slicertuple = (slicer, next_itr, openID)
+        slicertuple = (slicer, itr, openID)
         self.slicerStack.append(slicertuple)
 
     def popSlicer(self):
         slicer, next, openID = self.slicerStack.pop()
+
         if openID is not None:
             self.sendClose(openID)
+
         if self.debugSend:
             print('pop', slicer)
 
     def describeSend(self):
         where = []
+
         for i in self.slicerStack:
             try:
                 piece = i[0].describe()
@@ -355,6 +362,7 @@ class Banana(protocol.Protocol):
                 log.err()
                 piece = '???'
             where.append(piece)
+
         return '.'.join(where)
 
     def setOutgoingVocabulary(self, vocabBytes):
@@ -382,7 +390,7 @@ class Banana(protocol.Protocol):
         assert isinstance(vocabBytes, (list, tuple))
 
         for s in vocabBytes:
-            assert isinstance(s, bytes)
+            assert isinstance(s, bytes), s
 
         vocabDict = dict([(v, k) for k, v in enumerate(vocabBytes)])
 
@@ -466,10 +474,10 @@ class Banana(protocol.Protocol):
         self.transport.write(OPEN)
         return openID
 
-    def sendToken(self, obj):
-        write = self.transport.write
+    def sendToken(self, obj, write=STUB):
+        write = self.transport.write if write is STUB else write
 
-        if isinstance(obj, int):
+        if type(obj) is int:
             if obj < self.smallestInt or self.largestInt < obj:
                 raise BananaError('int is too large to send (%d)' % obj)
             if obj < 0:
@@ -480,12 +488,12 @@ class Banana(protocol.Protocol):
                 write(INT)
             return True
 
-        if isinstance(obj, float):
+        if type(obj) is float:
             write(FLOAT)
             write(struct_float.pack(obj))
             return True
 
-        if isinstance(obj, bytes):
+        if type(obj) is bytes:
             if self.debugSend:
                 print('sendToken[bytes]: ({}) {!r}'.format(len(obj), obj))
             if obj in self.outgoingVocabulary:
@@ -500,7 +508,7 @@ class Banana(protocol.Protocol):
                 write(obj)
             return True
 
-        if isinstance(obj, str):
+        if type(obj) is str:
             if self.debugSend:
                 print('sendToken[str]: ({}) {!r}'.format(len(obj), obj))
             data = obj.encode('utf8')
@@ -608,11 +616,11 @@ class Banana(protocol.Protocol):
                 print(" %s" % s)
 
     def setObject(self, count, obj):
-        for i in range(len(self.receiveStack)-1, -1, -1):
+        for i in range(len(self.receiveStack) - 1, -1, -1):
             self.receiveStack[i].setObject(count, obj)
 
     def getObject(self, count):
-        for i in range(len(self.receiveStack)-1, -1, -1):
+        for i in range(len(self.receiveStack) - 1, -1, -1):
             obj = self.receiveStack[i].getObject(count)
             if obj is not None:
                 return obj
@@ -630,25 +638,25 @@ class Banana(protocol.Protocol):
         self.incomingVocabulary[index] = value
 
     def dataReceived(self, chunk):
-        if self.connectionAbandoned:
-            return
-        if self.useKeepalives:
-            self.dataLastReceivedAt = time.time()
-        try:
-            self.handleData(chunk)
-        except Exception as e:
-            if isinstance(e, BananaError):
-                # only reveal the reason if it is a protocol error
-                e.where = self.describeReceive()
-                msg = str(e) # send them the text of the error
-            else:
-                msg = 'exception while processing data, more information in the logfiles'
-                if not self.logReceiveErrors:
-                    msg += ', except that self.logReceiveErrors=False'
-                    msg += ', sucks to be you'
-            self.sendError(msg)
-            self.connectionAbandoned = True
-            self.reportReceiveError(Failure())
+        if not self.connectionAbandoned:
+            if self.useKeepalives:
+                self.dataLastReceivedAt = time.time()
+
+            try:
+                self.handleData(chunk)
+            except Exception as exc:
+                if isinstance(exc, BananaError):
+                    # only reveal the reason if it is a protocol error
+                    exc.where = self.describeReceive()
+                    msg = str(exc) # send them the text of the error
+                else:
+                    msg = 'exception while processing data, more information in the logfiles'
+                    if not self.logReceiveErrors:
+                        msg += ', except that self.logReceiveErrors=False'
+                        msg += ', sucks to be you'
+                self.sendError(msg)
+                self.connectionAbandoned = True
+                self.reportReceiveError(Failure())
 
     def keepaliveTimerFired(self):
         self.keepaliveTimer = None
@@ -927,7 +935,7 @@ class Banana(protocol.Protocol):
                 size = header
 
                 if self.sizeLimit < size:
-                    raise BananaError('Security precaution: Bytes too long')
+                    raise BananaError('Security precaution: Bytes too long', size, self.sizeLimit)
 
                 if size <= len(self.buffer):
                     # the whole string is available
@@ -1052,6 +1060,7 @@ class Banana(protocol.Protocol):
     def handleClose(self, closeCount):
         if self.debugReceive:
             print("handleClose(%d)" % closeCount)
+
         if self.receiveStack[-1].openCount != closeCount:
             raise BananaError("lost sync, got CLOSE(%d) but expecting %s" \
                               % (closeCount, self.receiveStack[-1].openCount))
@@ -1065,35 +1074,35 @@ class Banana(protocol.Protocol):
             # don't have to discard anything. Just give an Failure to the
             # parent instead of the object they would have returned.
             f = BananaFailure()
-            self.handleViolation(f, "receiveClose", inClose=True)
-            return
-        if self.debugReceive: print("receiveClose returned", obj)
+            self.handleViolation(f, 'receiveClose', inClose=True)
+        else:
+            if self.debugReceive:
+                print('receiveClose returned', obj)
 
-        try:
-            child.finish()
-        except Violation:
-            # .finish could raise a Violation if an object that references
-            # the child is just now deciding that they don't like it
-            # (perhaps their TupleConstraint couldn't be asserted until the
-            # tuple was complete and referenceable). In this case, the child
-            # has produced a valid object, but an earlier (incomplete)
-            # object is not valid. So we treat this as if this child itself
-            # raised the Violation. The .where attribute will point to this
-            # child, which is the node that caused somebody problems, but
-            # will be marked <FINISH>, which indicates that it wasn't the
-            # child itself which raised the Violation. TODO: not true
-            #
-            # TODO: it would be more useful if the UF could also point to
-            # the completing object (the one which raised Violation).
+            try:
+                child.finish()
+            except Violation:
+                # .finish could raise a Violation if an object that references
+                # the child is just now deciding that they don't like it
+                # (perhaps their TupleConstraint couldn't be asserted until the
+                # tuple was complete and referenceable). In this case, the child
+                # has produced a valid object, but an earlier (incomplete)
+                # object is not valid. So we treat this as if this child itself
+                # raised the Violation. The .where attribute will point to this
+                # child, which is the node that caused somebody problems, but
+                # will be marked <FINISH>, which indicates that it wasn't the
+                # child itself which raised the Violation. TODO: not true
+                #
+                # TODO: it would be more useful if the UF could also point to
+                # the completing object (the one which raised Violation).
 
-            f = BananaFailure()
-            self.handleViolation(f, "finish", inClose=True)
-            return
+                f = BananaFailure()
+                self.handleViolation(f, 'finish', inClose=True)
+            else:
+                self.receiveStack.pop()
 
-        self.receiveStack.pop()
-
-        # now deliver the object to the parent
-        self.handleToken(obj, ready_deferred)
+                # now deliver the object to the parent
+                self.handleToken(obj, ready_deferred)
 
     def handleViolation(self, f, methname, inOpen=False, inClose=False):
         """An Unslicer has decided to give up, or we have given up on it

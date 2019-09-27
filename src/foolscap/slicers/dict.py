@@ -7,14 +7,17 @@ from foolscap.slicer import BaseSlicer, BaseUnslicer
 from foolscap.constraint import OpenerConstraint, Any, IConstraint
 from foolscap.util import AsyncAND
 
+
 class DictSlicer(BaseSlicer):
     opentype = (b'dict',)
     trackReferences = True
     slices = None
+
     def sliceBody(self, streamable, banana):
-        for key,value in self.obj.items():
+        for key, value in self.obj.items():
             yield key
             yield value
+
 
 class DictUnslicer(BaseUnslicer):
     opentype = (b'dict',)

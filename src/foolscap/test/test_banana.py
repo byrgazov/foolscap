@@ -1,52 +1,64 @@
 
-import six
-from twisted.trial import unittest
-from twisted.python import reflect
+from twisted.trial    import unittest
+from twisted.python   import reflect
 from twisted.python.failure import Failure
 from twisted.python.components import registerAdapter
 from twisted.internet import defer
 
-from foolscap.tokens import ISlicer, Violation, BananaError
-from foolscap.tokens import BananaFailure, tokenNames, \
-     OPEN, CLOSE, ABORT, INT, LONGINT, NEG, LONGNEG, FLOAT, STRING
-from foolscap import slicer, schema, storage, banana, vocab
+from foolscap.tokens   import ISlicer, Violation, BananaError
+from foolscap.tokens   import BananaFailure, tokenNames
+from foolscap.tokens   import OPEN, CLOSE, ABORT, ERROR, INT, NEG, FLOAT, STRING, BYTES, SVOCAB, BVOCAB
+from foolscap          import slicer, schema, storage, banana, vocab
 from foolscap.eventual import fireEventually, flushEventualQueue
 from foolscap.slicers.allslicers import RootSlicer, DictUnslicer, TupleUnslicer
 from foolscap.constraint import IConstraint
-from foolscap.banana import int2b128, long_to_bytes
+from foolscap.banana     import int2b128, Banana
 
-from six import StringIO
 import struct
+from io      import BytesIO
 from decimal import Decimal
 
-if six.PY3:
-    long = int
+PREFIX_LIMIT = Banana.prefixLimit
+
+
 #log.startLogging(sys.stderr)
 
 # some utility functions to manually assemble bytestreams
 
 def bOPEN(opentype, count):
+    assert type(opentype) is bytes, type(opentype)
     assert count < 128
-    return chr(count) + "\x88" + chr(len(opentype)) + "\x82" + opentype
+    return bytes([count]) + OPEN + bytes([len(opentype)]) + BYTES + opentype
+
 def bCLOSE(count):
     assert count < 128
-    return chr(count) + "\x89"
+    return bytes([count]) + CLOSE
+
 def bINT(num):
-    if num >=0:
-        assert num < 128
-        return chr(num) + "\x81"
+    if 0 <= num:
+        assert num < 128, num
+        return bytes([num]) + INT
     num = -num
-    assert num < 128
-    return chr(num) + "\x83"
-def bSTR(str):
-    assert len(str) < 128
-    return chr(len(str)) + "\x82" + str
-def bERROR(str):
-    assert len(str) < 128
-    return chr(len(str)) + "\x8d" + str
+    assert num < 128, num
+    return bytes([num]) + NEG
+
+def bSTR(value):
+    assert type(value) is str, type(value)
+    return bBYTES(value.encode('utf8'), STRING)
+
+def bBYTES(value, token=BYTES):
+    assert type(value) is bytes, type(value)
+    assert len(value) < 128
+    return bytes([len(value)]) + token + value
+
+def bERROR(value):
+    assert len(value) < 128
+    return bytes([len(value)]) + ERROR + value
+
 def bABORT(count):
     assert count < 128
-    return chr(count) + "\x8A"
+    return bytes([count]) + ABORT
+
 # DecodeTest (24): turns tokens into objects, tests objects and UFs
 # EncodeTest (13): turns objects/instance into tokens, tests tokens
 # FailedInstanceTests (2): 1:turn instances into tokens and fail, 2:reverse
@@ -61,30 +73,38 @@ def bABORT(count):
 # Sliceable (2): turn instance into tokens (with ISliceable, test tokens
 
 def tOPEN(count):
-    return ("OPEN", count)
+    return ('OPEN', count)
+
 def tCLOSE(count):
-    return ("CLOSE", count)
-tABORT = ("ABORT",)
+    return ('CLOSE', count)
+
+tABORT = ('ABORT',)
+
 
 class TokenBanana(banana.Banana):
     """this Banana formats tokens as strings, numbers, and ('OPEN',) tuples
     instead of bytes. Used for testing purposes."""
 
+    def __del__(self):
+        assert not self.rootSlicer.sendQueue
+
     def sendOpen(self):
         openID = self.openCount
         self.openCount += 1
-        self.sendToken(("OPEN", openID))
+        self.tokens.append(('OPEN', openID))
         return openID
 
     def sendToken(self, token):
-        #print token
-        self.tokens.append(token)
+        if super().sendToken(token, lambda data: None):
+            self.tokens.append(token)
+            return True
+        return False
 
     def sendClose(self, openID):
-        self.sendToken(("CLOSE", openID))
+        self.tokens.append(('CLOSE', openID))
 
     def sendAbort(self, count=0):
-        self.sendToken(("ABORT",))
+        self.tokens.append(('ABORT',))
 
     def sendError(self, msg):
         #print "TokenBanana.sendError(%s)" % msg
@@ -97,57 +117,59 @@ class TokenBanana(banana.Banana):
         d = self.send(obj)
         d.addCallback(self._testSlice_1)
         return d
+
     def _testSlice_1(self, res):
         assert len(self.slicerStack) == 1
         assert not self.rootSlicer.sendQueue
         assert isinstance(self.slicerStack[0][0], RootSlicer)
         return self.tokens
 
-    def __del__(self):
-        assert not self.rootSlicer.sendQueue
 
 def untokenize(tokens):
     data = []
+
     for t in tokens:
-        if isinstance(t, tuple):
-            if t[0] == "OPEN":
+        if type(t) is tuple:
+            if t[0] == 'OPEN':
                 int2b128(t[1], data.append)
                 data.append(OPEN)
-            elif t[0] == "CLOSE":
+            elif t[0] == 'CLOSE':
                 int2b128(t[1], data.append)
                 data.append(CLOSE)
-            elif t[0] == "ABORT":
+            elif t[0] == 'ABORT':
                 data.append(ABORT)
             else:
-                raise RuntimeError("bad token")
+                raise RuntimeError('bad token', t)
+
         else:
-            if isinstance(t, (int, long)):
-                if t >= 2**31:
-                    s = long_to_bytes(t)
-                    int2b128(len(s), data.append)
-                    data.append(LONGINT)
-                    data.append(s)
-                elif t >= 0:
+            if type(t) is int:
+                if 0 <= t:
                     int2b128(t, data.append)
                     data.append(INT)
-                elif -t > 2**31: # NEG is [-2**31, 0)
-                    s = long_to_bytes(-t)
-                    int2b128(len(s), data.append)
-                    data.append(LONGNEG)
-                    data.append(s)
                 else:
                     int2b128(-t, data.append)
                     data.append(NEG)
+
             elif isinstance(t, float):
                 data.append(FLOAT)
-                data.append(struct.pack("!d", t))
+                data.append(struct.pack('!d', t))
+
+            elif isinstance(t, bytes):
+                int2b128(len(t), data.append)
+                data.append(BYTES)
+                data.append(t)
+
             elif isinstance(t, str):
+                t = t.encode('utf8')
                 int2b128(len(t), data.append)
                 data.append(STRING)
                 data.append(t)
+
             else:
-                raise BananaError("could not send object: %s" % repr(t))
-    return "".join(data)
+                raise BananaError('could not send object: {!r}'.format(t))
+
+    return b''.join(data)
+
 
 class UnbananaTestMixin:
     def setUp(self):
@@ -156,36 +178,43 @@ class UnbananaTestMixin:
         self.banana.slicerClass = storage.UnsafeStorageRootSlicer
         self.banana.unslicerClass = storage.UnsafeStorageRootUnslicer
         self.banana.connectionMade()
+
     def tearDown(self):
         if not self.hangup:
-            self.assertTrue(len(self.banana.receiveStack) == 1)
-            self.assertTrue(isinstance(self.banana.receiveStack[0],
-                                       storage.UnsafeStorageRootUnslicer))
+            self.assertTrue(len(self.banana.receiveStack), 1)
+            self.assertTrue(isinstance(self.banana.receiveStack[0], storage.UnsafeStorageRootUnslicer))
 
     def do(self, tokens):
         self.banana.violation = None
         self.banana.disconnectReason = None
-        self.assertTrue(len(self.banana.receiveStack) == 1)
-        self.assertTrue(isinstance(self.banana.receiveStack[0],
-                                   storage.UnsafeStorageRootUnslicer))
+
+        self.assertTrue(len(self.banana.receiveStack), 1)
+        self.assertTrue(isinstance(self.banana.receiveStack[0], storage.UnsafeStorageRootUnslicer))
+
         data = untokenize(tokens)
         results = []
+
         d = self.banana.prepare()
         d.addCallback(results.append)
+
         self.banana.dataReceived(data)
+
         # we expect everything here to be synchronous
         if len(results) == 1:
             return results[0]
-        self.assertTrue(self.banana.violation or self.banana.disconnectReason)
-        return None
+
+        self.assertTrue(self.banana.violation or self.banana.disconnectReason,
+            (self.banana.violation, self.banana.disconnectReason, results))
 
     def shouldFail(self, tokens):
         obj = self.do(tokens)
+
         self.assertTrue(obj is None, "object was produced: %s" % obj)
         self.assertTrue(self.banana.violation, "didn't fail, ret=%s" % obj)
         self.assertFalse(self.banana.disconnectReason,
                          "connection was dropped: %s" % \
                          self.banana.disconnectReason)
+
         return self.banana.violation
 
     def shouldDropConnection(self, tokens):
@@ -225,16 +254,30 @@ class UnbananaTestMixin:
         self.assertEqual(res.where, where)
         self.banana.object = None # to stop the tearDown check TODO ??
 
-class TestTransport(StringIO):
+
+class TestTransport(BytesIO):
     disconnectReason = None
+
     def loseConnection(self):
         pass
 
-class _None: pass
+
+class _None:
+    pass
+
 
 class TestBananaMixin:
     def setUp(self):
         self.makeBanana()
+        pickle_protocol = storage.InstanceSlicer.pickle_protocol
+        assert pickle_protocol in (2, 3), pickle_protocol  # @todo: 0 & 4
+        self.pickle_protocol = 2
+
+        self.original_InstanceSlicer_ordered_state = storage.InstanceSlicer.ordered_state
+        storage.InstanceSlicer.ordered_state = True
+
+    def tearDown(self):
+        storage.InstanceSlicer.ordered_state = self.original_InstanceSlicer_ordered_state
 
     def makeBanana(self):
         self.banana = storage.StorageBanana()
@@ -254,14 +297,22 @@ class TestBananaMixin:
     def decode(self, stream):
         self.banana.violation = None
         results = []
+
         d = self.banana.prepare()
         d.addCallback(results.append)
+
+        #print('--', stream, ':', bytes(self.banana.buffer))
+        #print( '--', len(self.banana.receiveStack), self.banana.receiveStack[-1].constraint)
+        #self.banana.initSend()
+
+        self.banana.initReceive()  # [bw]
         self.banana.dataReceived(stream)
+
         # we expect everything here to be synchronous
         if len(results) == 1:
             return results[0]
+
         self.assertTrue(self.banana.violation or self.banana.disconnectReason)
-        return None
 
     def shouldDecode(self, stream):
         obj = self.decode(stream)
@@ -326,215 +377,277 @@ class TestBananaMixin:
         d = self.loop(obj)
         d.addCallback(self._looptest_1, newvalue)
         return d
+
     def _looptest_1(self, obj2, newvalue):
         self.assertEqual(obj2, newvalue)
         self.assertEqual(type(obj2), type(newvalue))
 
-def join(*args):
-    return "".join(args)
 
+def join(*args):
+    return b''.join(args)
 
 
 class BrokenDictUnslicer(DictUnslicer):
     dieInFinish = 0
 
     def receiveKey(self, key):
-        if key == "die":
-            raise Violation("aaagh")
-        if key == "please_die_in_finish":
+        if key == 'die':
+            raise Violation('aaagh')
+        if key == 'please_die_in_finish':
             self.dieInFinish = 1
         DictUnslicer.receiveKey(self, key)
 
     def receiveValue(self, value):
-        if value == "die":
-            raise Violation("aaaaaaaaargh")
+        if value == 'die':
+            raise Violation('aaaaaaaaargh')
         DictUnslicer.receiveValue(self, value)
 
     def receiveClose(self):
         if self.dieInFinish:
-            raise Violation("dead in receiveClose()")
+            raise Violation('dead in receiveClose()')
         DictUnslicer.receiveClose(self)
         return None, None
 
+
 class ReallyBrokenDictUnslicer(DictUnslicer):
     def start(self, count):
-        raise Violation("dead in start")
+        raise Violation('dead in start')
 
 
 class DecodeTest(UnbananaTestMixin, unittest.TestCase):
     def setUp(self):
         UnbananaTestMixin.setUp(self)
         self.banana.logReceiveErrors = False
-        d ={ ('dict1',): BrokenDictUnslicer,
-             ('dict2',): ReallyBrokenDictUnslicer,
-             }
+
+        d = {
+            (b'dict1',): BrokenDictUnslicer,
+            (b'dict2',): ReallyBrokenDictUnslicer
+        }
+
         self.banana.rootUnslicer.topRegistries.insert(0, d)
         self.banana.rootUnslicer.openRegistries.insert(0, d)
 
+        pickle_protocol = storage.InstanceSlicer.pickle_protocol
+        assert pickle_protocol in (2, 3), pickle_protocol  # @todo: 0 & 4
+
+        self.original_InstanceSlicer_pickle_protocol = pickle_protocol
+        self.pickle_protocol = 2
+
+    def tearDown(self):
+        storage.InstanceSlicer.pickle_protocol = self.original_InstanceSlicer_pickle_protocol
+
     def test_simple_list(self):
-        "simple list"
-        res = self.do([tOPEN(0),'list',1,2,3,"a","b",tCLOSE(0)])
-        self.assertEqual(res, [1,2,3,'a','b'])
+        """simple list"""
+        res = self.do([tOPEN(0), b'list', 1, 2, 3, 'a', 'b', tCLOSE(0)])
+        self.assertFalse(self.banana.violation)
+        self.assertEqual(res, [1, 2, 3, 'a', 'b'])
 
     def test_aborted_list(self):
-        "aborted list"
-        f = self.shouldFail([tOPEN(0),'list', 1, tABORT, tCLOSE(0)])
+        """aborted list"""
+        f = self.shouldFail([tOPEN(0), b'list', 1, tABORT, tCLOSE(0)])
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1]")
-        self.assertEqual(f.value.args[0], "ABORT received")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1]')
+        self.assertEqual(f.value.args[0], 'ABORT received')
 
     def test_aborted_list2(self):
-        "aborted list2"
-        f = self.shouldFail([tOPEN(0),'list', 1, tABORT,
-                             tOPEN(1),'list', 2, 3, tCLOSE(1),
+        """aborted list2"""
+        f = self.shouldFail([tOPEN(0), b'list', 1, tABORT,
+                              tOPEN(1), b'list', 2, 3, tCLOSE(1),
                              tCLOSE(0)])
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1]")
-        self.assertEqual(f.value.args[0], "ABORT received")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1]')
+        self.assertEqual(f.value.args[0], 'ABORT received')
 
     def test_aborted_list3(self):
-        "aborted list3"
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                              tOPEN(1),'list', 2, 3, 4,
-                               tOPEN(2),'list', 5, 6, tABORT, tCLOSE(2),
+        """aborted list3"""
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                              tOPEN(1), b'list', 2, 3, 4,
+                               tOPEN(2), b'list', 5, 6, tABORT, tCLOSE(2),
                               tCLOSE(1),
                              tCLOSE(0)])
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1].[3].[2]")
-        self.assertEqual(f.value.args[0], "ABORT received")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1].[3].[2]')
+        self.assertEqual(f.value.args[0], 'ABORT received')
 
     def test_nested_list(self):
-        "nested list"
-        res = self.do([tOPEN(0),'list',1,2,
-                        tOPEN(1),'list',3,4,tCLOSE(1),
+        """nested list"""
+        res = self.do([tOPEN(0), b'list', 1, 2,
+                        tOPEN(1), b'list', 3, 4, tCLOSE(1),
                        tCLOSE(0)])
-        self.assertEqual(res, [1,2,[3,4]])
+        self.assertEqual(res, [1, 2, [3, 4]])
 
     def test_list_with_tuple(self):
-        "list with tuple"
-        res = self.do([tOPEN(0),'list',1,2,
-                        tOPEN(1),'tuple',3,4,tCLOSE(1),
+        """list with tuple"""
+        res = self.do([tOPEN(0), b'list', 1, 2,
+                        tOPEN(1), b'tuple', 3, 4, tCLOSE(1),
                        tCLOSE(0)])
-        self.assertEqual(res, [1,2,(3,4)])
+        self.assertEqual(res, [1, 2, (3, 4)])
 
     def test_dict(self):
-        "dict"
-        res = self.do([tOPEN(0),'dict',"a",1,"b",2,tCLOSE(0)])
-        self.assertEqual(res, {'a':1, 'b':2})
+        """dict"""
+        res = self.do([tOPEN(0), b'dict', 'a', 1, 'b', 2, tCLOSE(0)])
+        self.assertEqual(res, {'a': 1, 'b': 2})
 
     def test_dict_with_duplicate_keys(self):
-        "dict with duplicate keys"
-        f = self.shouldDropConnection([tOPEN(0),'dict',
-                                       "a",1,"a",2,
+        """dict with duplicate keys"""
+        f = self.shouldDropConnection([tOPEN(0), b'dict',
+                                        'a', 1, 'a', 2,
                                        tCLOSE(0)])
-        self.assertEqual(f.value.where, "<RootUnslicer>.{}")
-        self.assertEqual(f.value.args[0], "duplicate key 'a'")
+        self.assertEqual(f.value.where, '<RootUnslicer>.{}')
+        self.assertEqual(f.value.args[0], 'duplicate key \'a\'')
 
     def test_dict_with_list(self):
-        "dict with list"
-        res = self.do([tOPEN(0),'dict',
-                        "a",1,
-                        "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
+        """dict with list"""
+        res = self.do([tOPEN(0), b'dict',
+                        'a', 1,
+                        'b', tOPEN(1), b'list', 2, 3, tCLOSE(1),
                        tCLOSE(0)])
-        self.assertEqual(res, {'a':1, 'b':[2,3]})
+        self.assertEqual(res, {'a': 1, 'b': [2, 3]})
 
     def test_dict_with_tuple_as_key(self):
-        "dict with tuple as key"
-        res = self.do([tOPEN(0),'dict',
-                        tOPEN(1),'tuple', 1, 2, tCLOSE(1), "a",
+        """dict with tuple as key"""
+        res = self.do([tOPEN(0), b'dict',
+                        tOPEN(1), b'tuple', 1, 2, tCLOSE(1), 'a',
                        tCLOSE(0)])
-        self.assertEqual(res, {(1,2):'a'})
+        self.assertEqual(res, {(1, 2): 'a'})
 
     def test_dict_with_mutable_key(self):
-        "dict with mutable key"
-        f = self.shouldDropConnection([tOPEN(0),'dict',
-                                        tOPEN(1),'list', 1, 2, tCLOSE(1), "a",
+        """dict with mutable key"""
+        f = self.shouldDropConnection([tOPEN(0), b'dict',
+                                        tOPEN(1), b'list', 1, 2, tCLOSE(1), 'a',
                                        tCLOSE(0)])
-        self.assertEqual(f.value.where, "<RootUnslicer>.{}")
-        self.assertEqual(f.value.args[0], "unhashable key '[1, 2]'")
+        self.assertEqual(f.value.where, '<RootUnslicer>.{}')
+        self.assertEqual(f.value.args[0], 'unhashable key \'[1, 2]\'')
 
     def test_instance(self):
-        "instance"
-        f1 = Foo(); f1.a = 1; f1.b = [2,3]
-        f2 = Bar(); f2.d = 4; f1.c = f2
-        res = self.do([tOPEN(0),'instance', "foolscap.test.test_banana.Foo",
-                        "a", 1,
-                        "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
-                        "c", tOPEN(2),'instance',
-                              "foolscap.test.test_banana.Bar",
-                              "d", 4,
-                             tCLOSE(2),
-                       tCLOSE(0)])
+        """instance"""
+
+        f1 = Foo(); f1.a = 1; f1.b = [2, 3]
+        f2 = Bar(); f2.d = 4; f2.e = f1
+        f1.c = f2
+
+        fooname = reflect.qual(Foo)
+        barname = reflect.qual(Bar)
+
+        res = self.do([
+            tOPEN(0), b'instance', self.pickle_protocol,
+              tOPEN(1), b'class', fooname, tCLOSE(1),
+              tOPEN(2), b'tuple', tCLOSE(2),
+              'a', 1,
+              'b', tOPEN(3), b'list', 2, 3, tCLOSE(3),
+              'c', tOPEN(4), b'instance', self.pickle_protocol,
+                     tOPEN(5), b'class', barname, tCLOSE(5),
+                     tOPEN(6), b'reference', 2, tCLOSE(6),  # see tuple above
+                     'd', 4,
+                     'e', tOPEN(7), b'reference', 0, tCLOSE(7),
+                   tCLOSE(4),
+            tCLOSE(0)
+        ])
+
+        # @xxx: recursion
+        self.assertIs(res, res.c.e)
+        self.assertIs(f1,  f1.c.e)
+        del f1.c.e
+        del res.c.e
+
+        self.assertEqual(res, f1)
+
+    def test_instance_reduce(self):
+        """instance"""
+
+        self.pickle_protocol = 0
+        storage.InstanceSlicer.pickle_protocol = 0
+
+        f1 = Foo(); f1.a = 1; f1.b = [2, 3]
+        f2 = Bar(); f2.d = 4; f2.e = f1
+        f1.c = f2
+
+        fooname = reflect.qual(Foo)
+        barname = reflect.qual(Bar)
+
+        res = self.do([
+            tOPEN(0), b'instance', self.pickle_protocol,
+              tOPEN(1), b'class', fooname, tCLOSE(1),
+              tOPEN(2), b'tuple', tCLOSE(2),
+              'a', 1,
+              'b', tOPEN(3), b'list', 2, 3, tCLOSE(3),
+              'c', tOPEN(4), b'instance', self.pickle_protocol,
+                     tOPEN(5), b'class', barname, tCLOSE(5),
+                     tOPEN(6), b'reference', 2, tCLOSE(6),  # see tuple above
+                     'd', 4,
+                     'e', tOPEN(7), b'reference', 0, tCLOSE(7),
+                   tCLOSE(4),
+            tCLOSE(0)
+        ])
+
+        # @xxx: recursion
+        self.assertIs(res, res.c.e)
+        self.assertIs(f1,  f1.c.e)
+        del f1.c.e
+        del res.c.e
+
         self.assertEqual(res, f1)
 
     def test_instance_bad1(self):
-        "subinstance with numeric classname"
-        tokens = [tOPEN(0),'instance', "Foo",
-                   "a", 1,
-                   "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
-                   "c",
-                   tOPEN(2),'instance', 37, "d", 4, tCLOSE(2),
-                  tCLOSE(0)]
+        tokens = [tOPEN(0), b'instance', 'Foo', tCLOSE(0)]
         f = self.shouldDropConnection(tokens)
-        self.assertEqual(f.value.where, "<RootUnslicer>.<Foo>.c.<??>")
-        self.assertEqual(f.value.args[0],
-                         "InstanceUnslicer classname must be string")
+        self.assertEqual(f.value.where, '<RootUnslicer>.<instance>')
+        self.assertEqual(f.value.args[0], 'InstanceUnslicer `pickle_protocol` token must be INT, got 0x{:x}'\
+            .format(ord(STRING)))
 
     def test_instance_bad2(self):
-        "subinstance with numeric attribute name"
-        tokens = [tOPEN(0),'instance', "Foo",
-                   "a", 1,
-                   "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
-                   "c",
-                   tOPEN(2),'instance',
-                    "Bar", 37, 4,
-                   tCLOSE(2),
-                  tCLOSE(0)]
+        tokens = [tOPEN(0), b'instance', 44, tCLOSE(0)]
         f = self.shouldDropConnection(tokens)
-        self.assertEqual(f.value.where,
-                         "<RootUnslicer>.<Foo>.c.<Bar>.attrname??")
-        self.assertEqual(f.value.args[0],
-                         "InstanceUnslicer keys must be STRINGs")
+        self.assertEqual(f.value.where, '<RootUnslicer>.<instance>')
+        self.assertEqual(f.value.args, ('Unknown `pickle_protocol`', 44))
+
+    # @todo: more tests
 
     def test_instance_unsafe1(self):
+        """instances when instances aren't allowed"""
 
-        "instances when instances aren't allowed"
         self.banana.rootUnslicer.topRegistries = [slicer.UnslicerRegistry]
         self.banana.rootUnslicer.openRegistries = [slicer.UnslicerRegistry]
 
-        tokens = [tOPEN(0),'instance', "Foo",
-                   "a", 1,
-                   "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
-                   "c",
-                   tOPEN(2),'instance',
-                    "Bar", 37, 4,
+        tokens = [tOPEN(0), b'instance', 'Foo',
+                   'a', 1,
+                   'b', tOPEN(1), b'list', 2, 3, tCLOSE(1),
+                   'c',
+                   tOPEN(2), b'instance',
+                    'Bar', 37, 4,
                    tCLOSE(2),
                   tCLOSE(0)]
+
         f = self.shouldFail(tokens)
-        self.assertEqual(f.value.where, "<RootUnslicer>")
-        self.assertEqual(f.value.args[0],
-                         "unknown top-level OPEN type ('instance',)")
+
+        self.assertEqual(f.value.where, '<RootUnslicer>')
+        self.assertEqual(f.value.args[0], 'unknown top-level OPEN type (b\'instance\',)')
 
     def test_ref1(self):
-        res = self.do([tOPEN(0),'list',
-                        tOPEN(1),'list', 1, 2, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+        res = self.do([tOPEN(0), b'list',
+                        tOPEN(1), b'list', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
-        self.assertEqual(res, [[1,2], [1,2]])
+
+        self.assertEqual(res, [[1, 2], [1, 2]])
         self.assertIs(res[0], res[1])
 
     def test_ref2(self):
-        res = self.do([tOPEN(0),'list',
-                       tOPEN(1),'list', 1, 2, tCLOSE(1),
-                       tOPEN(2),'reference', 0, tCLOSE(2),
+        res = self.do([tOPEN(0), b'list',
+                        tOPEN(1), b'list', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 0, tCLOSE(2),
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
-        wanted = [[1,2]]
+
+        wanted = [[1, 2]]
         wanted.append(wanted)
+
         # python2.3 is clever and can do
         #  self.failUnlessEqual(res, wanted)
         # python2.4 is not, so we do it by hand
@@ -543,39 +656,48 @@ class DecodeTest(UnbananaTestMixin, unittest.TestCase):
         self.assertIs(res, res[1])
 
     def test_ref3(self):
-        res = self.do([tOPEN(0),'list',
-                        tOPEN(1),'tuple', 1, 2, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+        res = self.do([tOPEN(0), b'list',
+                        tOPEN(1), b'tuple', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
-        wanted = [(1,2)]
+
+        wanted = [(1, 2)]
         wanted.append(wanted[0])
+
         self.assertEqual(res, wanted)
         self.assertIs(res[0], res[1])
 
     def test_ref4(self):
-        res = self.do([tOPEN(0),'list',
-                        tOPEN(1),'dict', "a", 1, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+        res = self.do([tOPEN(0), b'list',
+                        tOPEN(1), b'dict', 'a', 1, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
-        wanted = [{"a":1}]
+
+        wanted = [{'a': 1}]
         wanted.append(wanted[0])
+
         self.assertEqual(res, wanted)
         self.assertIs(res[0], res[1])
 
     def test_ref5(self):
         # The Droste Effect: a list that contains itself
-        res = self.do([tOPEN(0),'list',
+        res = self.do([tOPEN(0), b'list',
                         5,
                         6,
-                        tOPEN(1),'reference', 0, tCLOSE(1),
+                        tOPEN(1), b'reference', 0, tCLOSE(1),
                         7,
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
-        wanted = [5,6]
+
+        wanted = [5, 6]
         wanted.append(wanted)
         wanted.append(7)
+
         #self.failUnlessEqual(res, wanted)
         self.assertEqual(len(res), len(wanted))
         self.assertEqual(res[0:2], wanted[0:2])
@@ -589,16 +711,19 @@ class DecodeTest(UnbananaTestMixin, unittest.TestCase):
         # constructed, but the resulting object involves a lot of deferred
         # results because the mutable list is the *only* object that can
         # be created without dependencies
-        res = self.do([tOPEN(0),'tuple',
-                        tOPEN(1),'list',
-                         tOPEN(2),'tuple',
-                          tOPEN(3),'reference', 0, tCLOSE(3),
+        res = self.do([tOPEN(0), b'tuple',
+                        tOPEN(1), b'list',
+                         tOPEN(2), b'tuple',
+                          tOPEN(3), b'reference', 0, tCLOSE(3),
                          tCLOSE(2),
                         tCLOSE(1),
                        tCLOSE(0)])
+
         self.failIfBananaFailure(res)
+
         wanted = ([],)
         wanted[0].append((wanted,))
+
         #self.failUnlessEqual(res, wanted)
         self.assertTrue(type(res) is tuple)
         self.assertTrue(len(res) == 1)
@@ -615,113 +740,143 @@ class DecodeTest(UnbananaTestMixin, unittest.TestCase):
 
     def test_failed_dict1(self):
         # dies during open because of bad opentype
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                              tOPEN(1),"bad",
-                               "a", 2,
-                               "b", 3,
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                              tOPEN(1), b'bad',
+                               'a', 2,
+                               'b', 3,
                               tCLOSE(1),
                              tCLOSE(0)])
+
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1]")
-        self.assertEqual(f.value.args[0], "unknown OPEN type ('bad',)")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1]')
+        self.assertEqual(f.value.args[0], 'unknown OPEN type (b\'bad\',)')
 
     def test_failed_dict2(self):
         # dies during start
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                             tOPEN(1),'dict2', "a", 2, "b", 3, tCLOSE(1),
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                              tOPEN(1), b'dict2', 'a', 2, 'b', 3, tCLOSE(1),
                              tCLOSE(0)])
+
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1].{}")
-        self.assertEqual(f.value.args[0], "dead in start")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1].{}')
+        self.assertEqual(f.value.args[0], 'dead in start')
 
     def test_failed_dict3(self):
         # dies during key
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                             tOPEN(1),'dict1', "a", 2, "die", tCLOSE(1),
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                             tOPEN(1), b'dict1', 'a', 2, 'die', tCLOSE(1),
                              tCLOSE(0)])
+
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1].{}")
-        self.assertEqual(f.value.args[0], "aaagh")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1].{}')
+        self.assertEqual(f.value.args[0], 'aaagh')
 
-        res = self.do([tOPEN(2),'list', 3, 4, tCLOSE(2)])
-        self.assertEqual(res, [3,4])
+        res = self.do([tOPEN(2), b'list', 3, 4, tCLOSE(2)])
+        self.assertEqual(res, [3, 4])
 
     def test_failed_dict4(self):
         # dies during value
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                              tOPEN(1),'dict1',
-                               "a", 2,
-                               "b", "die",
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                              tOPEN(1), b'dict1',
+                               'a', 2,
+                               'b', 'die',
                               tCLOSE(1),
                              tCLOSE(0)])
+
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1].{}[b]")
-        self.assertEqual(f.value.args[0], "aaaaaaaaargh")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1].{}[b]')
+        self.assertEqual(f.value.args[0], 'aaaaaaaaargh')
 
     def test_failed_dict5(self):
         # dies during finish
-        f = self.shouldFail([tOPEN(0),'list', 1,
-                              tOPEN(1),'dict1',
-                               "a", 2,
-                               "please_die_in_finish", 3,
+        f = self.shouldFail([tOPEN(0), b'list', 1,
+                              tOPEN(1), b'dict1',
+                               'a', 2,
+                               'please_die_in_finish', 3,
                               tCLOSE(1),
                              tCLOSE(0)])
+
         self.assertTrue(isinstance(f, BananaFailure))
         self.assertTrue(f.check(Violation))
-        self.assertEqual(f.value.where, "<RootUnslicer>.[1].{}")
-        self.assertEqual(f.value.args[0], "dead in receiveClose()")
+        self.assertEqual(f.value.where, '<RootUnslicer>.[1].{}')
+        self.assertEqual(f.value.args[0], 'dead in receiveClose()')
+
 
 class Bar:
-    def __cmp__(self, them):
-        if not type(them) == type(self):
-            return -1
-        return cmp((self.__class__, self.__dict__),
-                   (them.__class__, them.__dict__))
+    def __repr__(self):
+        return '<{} at {:x}>'.format(type(self).__name__, id(self))
+
+    def __eq__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ == other.__dict__
+        return NotImplemented
+
+    def __lt__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ < other.__dict__
+        return NotImplemented
+
+
 class Foo(Bar):
     pass
+
 
 class EncodeTest(unittest.TestCase):
     def setUp(self):
         self.banana = TokenBanana()
-        self.banana.slicerClass = storage.UnsafeStorageRootSlicer
+        self.banana.slicerClass   = storage.UnsafeStorageRootSlicer
         self.banana.unslicerClass = storage.UnsafeStorageRootUnslicer
         self.banana.connectionMade()
-    def do(self, obj):
-        return self.banana.testSlice(obj)
+
+        pickle_protocol = storage.InstanceSlicer.pickle_protocol
+        assert pickle_protocol in (2, 3), pickle_protocol  # @todo: 0 & 4
+        self.pickle_protocol = 2
+
+        self.original_InstanceSlicer_pickle_protocol = pickle_protocol
+        self.original_InstanceSlicer_ordered_state   = storage.InstanceSlicer.ordered_state
+
+        storage.InstanceSlicer.ordered_state = True
+
     def tearDown(self):
-        self.assertTrue(len(self.banana.slicerStack) == 1)
+        storage.InstanceSlicer.pickle_protocol = self.original_InstanceSlicer_pickle_protocol
+        storage.InstanceSlicer.ordered_state   = self.original_InstanceSlicer_ordered_state
+
+        self.assertEqual(len(self.banana.slicerStack), 1)
         self.assertTrue(isinstance(self.banana.slicerStack[0][0], RootSlicer))
 
+    def do(self, obj):
+        return self.banana.testSlice(obj)
+
     def testList(self):
-        d = self.do([1,2])
+        d = self.do([1, 2])
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list', 1, 2, tCLOSE(0)])
+                      [tOPEN(0), b'list', 1, 2, tCLOSE(0)])
         return d
 
     def testTuple(self):
-        d = self.do((1,2))
+        d = self.do((1, 2))
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'tuple', 1, 2, tCLOSE(0)])
+                      [tOPEN(0), b'tuple', 1, 2, tCLOSE(0)])
         return d
 
     def testNestedList(self):
-        d = self.do([1,2,[3,4]])
+        d = self.do([1, 2, [3, 4]])
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list', 1, 2,
-                        tOPEN(1),'list', 3, 4, tCLOSE(1),
+                      [tOPEN(0), b'list', 1, 2,
+                        tOPEN(1), b'list', 3, 4, tCLOSE(1),
                        tCLOSE(0)])
         return d
 
     def testNestedList2(self):
-        d = self.do([1,2,(3,4,[5, "hi"])])
+        d = self.do([1, 2, (3, 4, [5, 'hi'])])
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list', 1, 2,
-                        tOPEN(1),'tuple', 3, 4,
-                         tOPEN(2),'list', 5, "hi", tCLOSE(2),
+                      [tOPEN(0), b'list', 1, 2,
+                        tOPEN(1), b'tuple', 3, 4,
+                         tOPEN(2), b'list', 5, 'hi', tCLOSE(2),
                         tCLOSE(1),
                        tCLOSE(0)])
         return d
@@ -730,51 +885,51 @@ class EncodeTest(unittest.TestCase):
         d = self.do({'a': 1, 'b': 2})
         d.addCallback(lambda res:
                       self.assertTrue(
-            res == [tOPEN(0),'dict', 'a', 1, 'b', 2, tCLOSE(0)] or
-            res == [tOPEN(0),'dict', 'b', 2, 'a', 1, tCLOSE(0)]))
+            res == [tOPEN(0), b'dict', 'a', 1, 'b', 2, tCLOSE(0)] or
+            res == [tOPEN(0), b'dict', 'b', 2, 'a', 1, tCLOSE(0)]))
         return d
 
     def test_ref1(self):
-        l = [1,2]
-        obj = [l,l]
+        l = [1, 2]
+        obj = [l, l]
         d = self.do(obj)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list',
-                        tOPEN(1),'list', 1, 2, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+                      [tOPEN(0), b'list',
+                        tOPEN(1), b'list', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
         return d
 
     def test_ref2(self):
-        obj = [[1,2]]
+        obj = [[1, 2]]
         obj.append(obj)
         d = self.do(obj)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list',
-                        tOPEN(1),'list', 1, 2, tCLOSE(1),
-                        tOPEN(2),'reference', 0, tCLOSE(2),
+                      [tOPEN(0), b'list',
+                        tOPEN(1), b'list', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 0, tCLOSE(2),
                        tCLOSE(0)])
         return d
 
     def test_ref3(self):
-        obj = [(1,2)]
+        obj = [(1, 2)]
         obj.append(obj[0])
         d = self.do(obj)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list',
-                        tOPEN(1),'tuple', 1, 2, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+                      [tOPEN(0), b'list',
+                        tOPEN(1), b'tuple', 1, 2, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
         return d
 
     def test_ref4(self):
-        obj = [{"a":1}]
+        obj = [{'a': 1}]
         obj.append(obj[0])
         d = self.do(obj)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'list',
-                        tOPEN(1),'dict', "a", 1, tCLOSE(1),
-                        tOPEN(2),'reference', 1, tCLOSE(2),
+                      [tOPEN(0), b'list',
+                        tOPEN(1), b'dict', 'a', 1, tCLOSE(1),
+                        tOPEN(2), b'reference', 1, tCLOSE(2),
                        tCLOSE(0)])
         return d
 
@@ -784,10 +939,10 @@ class EncodeTest(unittest.TestCase):
         obj[0].append((obj,))
         d = self.do(obj)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'tuple',
-                        tOPEN(1),'list',
-                         tOPEN(2),'tuple',
-                          tOPEN(3),'reference', 0, tCLOSE(3),
+                      [tOPEN(0), b'tuple',
+                        tOPEN(1), b'list',
+                         tOPEN(2), b'tuple',
+                          tOPEN(3), b'reference', 0, tCLOSE(3),
                          tCLOSE(2),
                         tCLOSE(1),
                        tCLOSE(0)])
@@ -795,15 +950,15 @@ class EncodeTest(unittest.TestCase):
 
     def test_refdict1(self):
         # a dictionary with a value that isn't available right away
-        d0 = {1: "a"}
+        d0 = {1: 'a'}
         t = (d0,)
         d0[2] = t
         d = self.do(d0)
         d.addCallback(self.assertEqual,
-                      [tOPEN(0),'dict',
-                        1, "a",
-                        2, tOPEN(1),'tuple',
-                            tOPEN(2),'reference', 0, tCLOSE(2),
+                      [tOPEN(0), b'dict',
+                        1, 'a',
+                        2, tOPEN(1), b'tuple',
+                            tOPEN(2), b'reference', 0, tCLOSE(2),
                            tCLOSE(1),
                        tCLOSE(0)])
         return d
@@ -811,29 +966,71 @@ class EncodeTest(unittest.TestCase):
     def test_instance_one(self):
         obj = Bar()
         obj.a = 1
+
         classname = reflect.qual(Bar)
+
         d = self.do(obj)
-        d.addCallback(self.assertEqual,
-                      [tOPEN(0),'instance', classname, "a", 1, tCLOSE(0)])
+
+        d.addCallback(self.assertEqual, [
+            tOPEN(0), b'instance', self.pickle_protocol,
+              tOPEN(1), b'class', classname, tCLOSE(1),
+              tOPEN(2), b'tuple', tCLOSE(2),
+#             tOPEN(3), b'dict', 'a', 1, tCLOSE(3),
+              'a', 1,
+            tCLOSE(0)
+        ])
+
         return d
 
     def test_instance_two(self):
-        f1 = Foo(); f1.a = 1; f1.b = [2,3]
-        f2 = Bar(); f2.d = 4; f1.c = f2
+        f1 = Foo(); f1.a = 1; f1.b = [2, 3]
+        f2 = Bar(); f2.d = 4; f2.e = f1
+        f1.c = f2
+
         fooname = reflect.qual(Foo)
         barname = reflect.qual(Bar)
-        # needs OrderedDictSlicer for the test to work
-        d = self.do(f1)
-        d.addCallback(self.assertEqual,
-                      [tOPEN(0),'instance', fooname,
-                        "a", 1,
-                        "b", tOPEN(1),'list', 2, 3, tCLOSE(1),
-                        "c",
-                          tOPEN(2),'instance', barname,
-                           "d", 4,
-                          tCLOSE(2),
-                       tCLOSE(0)])
 
+        d = self.do(f1)
+
+        d.addCallback(self.assertEqual, [
+            tOPEN(0), b'instance', self.pickle_protocol,
+              tOPEN(1), b'class', fooname, tCLOSE(1),
+              tOPEN(2), b'tuple', tCLOSE(2),
+              'a', 1,
+              'b', tOPEN(3), b'list', 2, 3, tCLOSE(3),
+              'c', tOPEN(4), b'instance', self.pickle_protocol,
+                     tOPEN(5), b'class', barname, tCLOSE(5),
+                     tOPEN(6), b'reference', 2, tCLOSE(6),  # see tuple above
+                     'd', 4,
+                     'e', tOPEN(7), b'reference', 0, tCLOSE(7),
+                   tCLOSE(4),
+            tCLOSE(0)
+        ])
+
+    def test_instance_reduce(self):
+        self.pickle_protocol = 0
+        storage.InstanceSlicer.pickle_protocol = 0
+
+        obj = Bar()
+        obj.a = 1
+
+        classname = reflect.qual(Bar)
+
+        d = self.do(obj)
+
+        d.addCallback(self.assertEqual, [
+            tOPEN(0), b'instance', self.pickle_protocol,
+              tOPEN(1), b'function', 'copyreg._reconstructor', tCLOSE(1),
+              tOPEN(2), b'tuple',
+                tOPEN(3), b'class', classname, tCLOSE(3),
+                tOPEN(4), b'class', 'builtins.object', tCLOSE(4),
+                tOPEN(5), b'none', tCLOSE(5),
+              tCLOSE(2),
+              'a', 1,
+            tCLOSE(0)
+        ])
+
+        return d
 
 
 class ErrorfulSlicer(slicer.BaseSlicer):
@@ -842,51 +1039,63 @@ class ErrorfulSlicer(slicer.BaseSlicer):
         self.items = [1]
         self.items.append(mode)
         self.items.append(3)
+
         #if mode not in ('success', 'deferred-good'):
         if not shouldSucceed:
-            self.items.append("unreached")
-        self.counter = -1
+            self.items.append('unreached')
+
+        self.counter   = -1
         self.childDied = False
         self.ignoreChildDeath = ignoreChildDeath
 
     def __iter__(self):
         return self
-    def slice(self, streamable, banana):
-        self.streamable = streamable
-        if self.mode == "slice":
-            raise Violation("slice failed")
-        return self
-    def next(self):
-        return self.__next__()
+
     def __next__(self):
         self.counter += 1
         if not self.items:
             raise StopIteration
+
         obj = self.items.pop(0)
-        if obj == "next":
-            raise Violation("next failed")
-        if obj == "deferred-good":
+
+        if obj == 'next':
+            raise Violation('next failed')
+
+        if obj == 'deferred-good':
             return fireEventually(None)
-        if obj == "deferred-bad":
+
+        if obj == 'deferred-bad':
             d = defer.Deferred()
             # the Banana should bail, so don't bother with the timer
             return d
-        if obj == "newSlicerFor":
-            unserializable = open("unserializable.txt", "w")
+
+        if obj == 'newSlicerFor':
+            unserializable = open('unserializable.txt', 'w')
             # Hah! Serialize that!
             return unserializable
-        if obj == "unreached":
-            print("error: slicer.next called after it should have stopped")
+
+        if obj == 'unreached':
+            print('error: slicer.next called after it should have stopped')
+
         return obj
+
+    def slice(self, streamable, banana):
+        self.streamable = streamable
+        if self.mode == 'slice':
+            raise Violation('slice failed')
+        return self
+
+    def next(self):
+        return self.__next__()
 
     def childAborted(self, v):
         self.childDied = True
-        if self.ignoreChildDeath:
-            return None
-        return v
+        if not self.ignoreChildDeath:
+            return v
 
     def describe(self):
         return "ErrorfulSlicer[%d]" % self.counter
+
 
 # Slicer creation (schema pre-validation?)
 # .slice (called in pushSlicer) ?
@@ -895,6 +1104,7 @@ class ErrorfulSlicer(slicer.BaseSlicer):
 # .sendToken (non-primitive token, can't happen)
 # .newSlicerFor (no ISlicer adapter)
 # top.childAborted
+
 
 class EncodeFailureTest(unittest.TestCase):
     def setUp(self):
@@ -935,6 +1145,7 @@ class EncodeFailureTest(unittest.TestCase):
         d.addCallbacks(lambda res: self.fail("this was supposed to fail"),
                        self._test1_1)
         return d
+
     def _test1_1(self, e):
         e.trap(Violation)
         self.assertEqual(e.value.where, "<RootSlicer>")
@@ -948,6 +1159,7 @@ class EncodeFailureTest(unittest.TestCase):
         d.addCallbacks(lambda res: self.fail("this was supposed to fail"),
                        self._test2_1)
         return d
+
     def _test2_1(self, e):
         e.trap(Violation)
         self.assertEqual(e.value.where, "<RootSlicer>.ErrorfulSlicer[1]")
@@ -963,6 +1175,7 @@ class EncodeFailureTest(unittest.TestCase):
         d.addCallbacks(lambda res: self.fail("this was supposed to fail"),
                        self._test3_1)
         return d
+
     def _test3_1(self, e):
         e.trap(Violation)
         self.assertEqual(e.value.where, "<RootSlicer>.ErrorfulSlicer[1]")
@@ -972,48 +1185,54 @@ class EncodeFailureTest(unittest.TestCase):
 
     def test4(self):
         # .newSlicerFor (no ISlicer adapter), parent propagates upwards
-        s = ErrorfulSlicer("newSlicerFor", False)
+        s = ErrorfulSlicer('newSlicerFor', False)
         d = self.send(s)
-        d.addCallbacks(lambda res: self.fail("this was supposed to fail"),
-                       self._test4_1, errbackArgs=(s,))
-        return d
-    def _test4_1(self, e, s):
-        e.trap(Violation)
-        self.assertEqual(e.value.where, "<RootSlicer>.ErrorfulSlicer[1]")
-        self.assertIn("cannot serialize <open file",
-                      e.value.args[0])
-        self.assertTrue(s.childDied)
-        self.assertEqual(self.banana.tokens,
-                         [('OPEN', 0), 1, ('ABORT',), ('CLOSE', 0)])
+
+        def test(e, s):
+            e.trap(Violation)
+            self.assertEqual(e.value.where, '<RootSlicer>.ErrorfulSlicer[1].<instance of TextIOWrapper>')
+            self.assertIn('cannot serialize', e.value.args[0])
+            self.assertTrue(s.childDied)
+            self.assertEqual(self.banana.tokens, [
+                ('OPEN', 0), 1,
+                  ('OPEN', 1), b'instance', ('ABORT',), ('CLOSE', 1),
+                  ('ABORT',),
+                ('CLOSE', 0)
+            ])
+
+        return d.addCallbacks(lambda res: self.fail('this was supposed to fail'), test, errbackArgs=(s,))
 
     def test5(self):
         # .newSlicerFor (no ISlicer adapter), parent ignores
-        s = ErrorfulSlicer("newSlicerFor", True, True)
+        s = ErrorfulSlicer('newSlicerFor', True, True)
         d = self.send(s)
-        d.addCallback(lambda res:
-                      self.assertTrue(s.childDied)) # noticed but ignored
-        d.addCallback(lambda res:
-                      self.assertEqual(self.banana.tokens,
-                                       [('OPEN', 0), 1, 3, ('CLOSE', 0)]))
+        d.addCallback(lambda res: self.assertTrue(s.childDied)) # noticed but ignored
+        d.addCallback(lambda res: self.assertEqual(self.banana.tokens, [
+            ('OPEN', 0), 1,
+              ('OPEN', 1), b'instance', ('ABORT',), ('CLOSE', 1),
+              3,
+            ('CLOSE', 0)
+        ]))
         return d
 
     def test_instance_unsafe(self):
         self.banana.rootSlicer.slicerTable = {}
-        f1 = Foo(); f1.a = 1; f1.b = [2,3]
+
+        f1 = Foo(); f1.a = 1; f1.b = [2, 3]
         d = self.send(f1)
-        d.addCallbacks(lambda res: self.fail("this was supposed to fail"),
-                       self._test_instance_unsafe_1)
+
+        def test(e):
+            e.trap(Violation)
+            self.assertEqual(e.value.where, '<RootSlicer>')
+            why = e.value.args[0]
+            self.assertTrue(why.startswith('cannot serialize <Foo at'))
+            self.assertTrue(why.endswith(' (<class \'foolscap.test.test_banana.Foo\'>)'))
+            # it will fail before any tokens have been emitted
+            self.assertEqual(self.banana.tokens, [])
+
+        d.addCallbacks(lambda res: self.fail('this was supposed to fail'), test)
         return d
-    def _test_instance_unsafe_1(self, e):
-        e.trap(Violation)
-        self.assertEqual(e.value.where, "<RootSlicer>")
-        why = e.value.args[0]
-        self.assertTrue(
-            why.startswith("cannot serialize "
-                           "<foolscap.test.test_banana.Foo instance at"))
-        self.assertTrue(why.endswith(" (foolscap.test.test_banana.Foo)"))
-        # it will fail before any tokens have been emitted
-        self.assertEqual(self.banana.tokens, [])
+
 
 # receiving side:
 #  long header (>64 bytes)
@@ -1089,6 +1308,7 @@ class ErrorfulUnslicer(slicer.BaseUnslicer):
     def describe(self):
         return "errorful"
 
+
 class FailingUnslicer(TupleUnslicer):
     def receiveChild(self, obj, ready_deferred=None):
         if self.protocol.mode != "success":
@@ -1097,29 +1317,36 @@ class FailingUnslicer(TupleUnslicer):
     def describe(self):
         return "failing"
 
+
 class DecodeFailureTest(TestBananaMixin, unittest.TestCase):
-    listStream = join(bOPEN("errorful", 0), bINT(1), bINT(2), bCLOSE(0))
-    nestedStream = join(bOPEN("errorful", 0), bINT(1),
-                        bOPEN("list", 1), bINT(2), bINT(3), bCLOSE(1),
+    listStream = join(bOPEN(b'errorful', 0), bINT(1), bINT(2), bCLOSE(0))
+
+    nestedStream = join(bOPEN(b'errorful', 0), bINT(1),
+                         bOPEN(b'list', 1), bINT(2), bINT(3),
+                         bCLOSE(1),
                         bCLOSE(0))
-    nestedStream2 = join(bOPEN("failing", 0), bSTR("a"),
-                          bOPEN("errorful", 1), bINT(1),
-                           bOPEN("list", 2), bINT(2), bINT(3), bCLOSE(2),
+
+    nestedStream2 = join(bOPEN(b'failing', 0), bSTR("a"),
+                          bOPEN(b'errorful', 1), bINT(1),
+                           bOPEN(b'list', 2), bINT(2), bINT(3),
+                           bCLOSE(2),
                           bCLOSE(1),
                           bSTR("b"),
-                          bCLOSE(0),
-                         )
-    abortStream = join(bOPEN("errorful", 0), bINT(1),
-                        bOPEN("list", 1),
+                         bCLOSE(0))
+
+    abortStream = join(bOPEN(b'errorful', 0), bINT(1),
+                        bOPEN(b'list', 1),
                          bINT(2), bABORT(1), bINT(3),
                         bCLOSE(1),
                        bCLOSE(0))
 
     def setUp(self):
         TestBananaMixin.setUp(self)
-        d = {('errorful',): ErrorfulUnslicer,
-             ('failing',): FailingUnslicer,
-             }
+        d = {
+            (b'errorful',): ErrorfulUnslicer,
+            (b'failing',) : FailingUnslicer,
+         }
+
         self.banana.rootUnslicer.topRegistries.insert(0, d)
         self.banana.rootUnslicer.openRegistries.insert(0, d)
         self.banana.ignoreChildDeath = False
@@ -1135,17 +1362,17 @@ class DecodeFailureTest(TestBananaMixin, unittest.TestCase):
 
     def testLongHeader(self):
         # would be a string but the header is too long
-        s = "\x01" * 66 + "\x82" + "stupidly long string"
-        f = self.shouldDropConnection(s)
-        self.assertTrue(f.value.args[0].startswith("token prefix is limited to 64 bytes"))
+        b = b'\x01' * 66 + STRING + b'stupidly long string'
+        f = self.shouldDropConnection(b)
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
 
     def testLongHeader2(self):
         # bad string while discarding
-        s = "\x01" * 66 + "\x82" + "stupidly long string"
-        s = bOPEN("errorful",0) + bINT(1) + s + bINT(2) + bCLOSE(0)
-        self.banana.mode = "start"
+        s = b'\x01' * 66 + STRING + b'stupidly long string'
+        s = bOPEN(b'errorful', 0) + bINT(1) + s + bINT(2) + bCLOSE(0)
+        self.banana.mode = 'start'
         f = self.shouldDropConnection(s)
-        self.assertTrue(f.value.args[0].startswith("token prefix is limited to 64 bytes"))
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
 
     def testCheckToken1(self):
         # violation raised in top.openerCheckToken
@@ -1272,11 +1499,11 @@ class DecodeFailureTest(TestBananaMixin, unittest.TestCase):
         self.assertEqual(f.value.args[0], "foom")
         self.testSuccess1()
 
-class ByteStream(TestBananaMixin, unittest.TestCase):
 
+class ByteStream(TestBananaMixin, unittest.TestCase):
     def test_list(self):
         obj = [1,2]
-        expected = join(bOPEN("list", 0),
+        expected = join(bOPEN(b'list', 0),
                          bINT(1), bINT(2),
                         bCLOSE(0),
                         )
@@ -1289,10 +1516,10 @@ class ByteStream(TestBananaMixin, unittest.TestCase):
         obj = ([],)
         obj[0].append((obj,))
 
-        expected = join(bOPEN("tuple",0),
-                         bOPEN("list",1),
-                          bOPEN("tuple",2),
-                           bOPEN("reference",3),
+        expected = join(bOPEN(b'tuple',0),
+                         bOPEN(b'list',1),
+                          bOPEN(b'tuple',2),
+                           bOPEN(b'reference',3),
                             bINT(0),
                            bCLOSE(3),
                           bCLOSE(2),
@@ -1303,114 +1530,140 @@ class ByteStream(TestBananaMixin, unittest.TestCase):
         return d
 
     def test_two(self):
-        f1 = Foo(); f1.a = 1; f1.b = [2,3]
+        f1 = Foo(); f1.a = 1; f1.b = [2, 3]
         f2 = Bar(); f2.d = 4; f1.c = f2
+
         fooname = reflect.qual(Foo)
         barname = reflect.qual(Bar)
         # needs OrderedDictSlicer for the test to work
 
-        expected = join(bOPEN("instance",0), bSTR(fooname),
-                         bSTR("a"), bINT(1),
-                         bSTR("b"),
-                          bOPEN("list",1),
-                           bINT(2), bINT(3),
-                          bCLOSE(1),
-                         bSTR("c"),
-                           bOPEN("instance",2), bSTR(barname),
-                            bSTR("d"), bINT(4),
-                           bCLOSE(2),
-                        bCLOSE(0))
-        d = self.encode(f1)
-        d.addCallback(self.wantEqual, expected)
-        return d
+        expected = join(
+            bOPEN(b'instance', 0), bINT(self.pickle_protocol),
+              bOPEN(b'class', 1), bSTR(fooname), bCLOSE(1),
+              bOPEN(b'tuple', 2), bCLOSE(2),
+              bSTR('a'), bINT(1),
+              bSTR('b'), bOPEN(b'list', 3), bINT(2), bINT(3), bCLOSE(3),
+              bSTR('c'), bOPEN(b'instance', 4), bINT(self.pickle_protocol),
+                           bOPEN(b'class', 5), bSTR(barname), bCLOSE(5),
+                           bOPEN(b'reference', 6), bINT(2), bCLOSE(6),  # see tuple above
+                           bSTR('d'), bINT(4),
+                         bCLOSE(4),
+            bCLOSE(0))
+
+        return self.encode(f1)\
+            .addCallback(self.wantEqual, expected)
+
 
 class InboundByteStream(TestBananaMixin, unittest.TestCase):
-
     def check(self, obj, stream):
         # use a new Banana for each check
         self.makeBanana()
         obj2 = self.shouldDecode(stream)
         self.assertEqual(obj, obj2)
 
-    def testInt(self):
-        self.check(1, "\x01\x81")
-        self.check(130, "\x02\x01\x81")
-        self.check(-1, "\x01\x83")
-        self.check(-130, "\x02\x01\x83")
-        self.check(0, bINT(0))
-        self.check(1, bINT(1))
-        self.check(127, bINT(127))
-        self.check(-1, bINT(-1))
-        self.check(-127, bINT(-127))
+    def TRUE(self):
+        return join(bOPEN(b'boolean', 2), bINT(1), bCLOSE(2))
 
-    def testInt2(self):
+    def FALSE(self):
+        return join(bOPEN(b'boolean', 2), bINT(0), bCLOSE(2))
+
+    def testBool(self):
+        self.check(True,  self.TRUE())
+        self.check(False, self.FALSE())
+
+    def testInt(self):
+        self.check( 1,   b'\x01' + INT)
+        self.check( 130, b'\x02\x01' + INT)
+        self.check(-1,   b'\x01' + NEG)
+        self.check(-130, b'\x02\x01' + NEG)
+        self.check( 0,   bINT(0))
+        self.check( 1,   bINT(1))
+        self.check( 127, bINT(127))
+        self.check(-1,   bINT(-1))
+        self.check(-127, bINT(-127))
         # Not longs anymore
-        self.check(258, "\x02\x85\x01\x02") # TODO: 0x85 for LONGINT??
-        self.check(-258, "\x02\x86\x01\x02") # TODO: 0x85 for LONGINT??
-        self.check(0, "\x85")
-        self.check(0, "\x00\x85")
-        self.check(0, "\x86")
-        self.check(0, "\x00\x86")
+        self.check( 258, b'\x02\x02' + INT)
+        self.check(-258, b'\x02\x02' + NEG)
+        self.check( 0,   INT)
+        self.check( 0,   b'\x00' + INT)
+        self.check( 0,   NEG)
+        self.check( 0,   b'\x00' + NEG)
+
+    def testBytes(self):
+        self.check(b'', BYTES)
+        self.check(b'', b'\x00' + BYTES)
+        self.check(b'', b'\x00\x00' + BYTES)
+        self.check(b'', b'\x00' * PREFIX_LIMIT + BYTES)
+
+        limit65 = PREFIX_LIMIT + 1
+
+        f = self.shouldDropConnection(b'\x00' * limit65)
+        self.assertEqual(f.value.where, '<RootUnslicer>')
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
+
+        f = self.shouldDropConnection(b'\x00' * limit65 + BYTES)
+        self.assertEqual(f.value.where, '<RootUnslicer>')
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
+
+        self.check(b'a',        b'\x01' + BYTES + b'a')
+        self.check(b'b' * 130,  b'\x02\x01' + BYTES + b'b' * 130  + b'extra')
+        self.check(b'c' * 1025, b'\x01\x08' + BYTES + b'c' * 1025 + b'extra')
+        self.check(b'fluuber', bBYTES(b'fluuber'))
 
     def testString(self):
-        self.check("", "\x82")
-        self.check("", "\x00\x82")
-        self.check("", "\x00\x00\x82")
-        self.check("", "\x00" * 64 + "\x82")
+        self.check('', STRING)
+        self.check('', b'\x00' + STRING)
+        self.check('', b'\x00\x00' + STRING)
+        self.check('', b'\x00' * PREFIX_LIMIT + STRING)
 
-        f = self.shouldDropConnection("\x00" * 65)
-        self.assertEqual(f.value.where, "<RootUnslicer>")
-        self.assertTrue(f.value.args[0].startswith("token prefix is limited to 64 bytes"))
-        f = self.shouldDropConnection("\x00" * 65 + "\x82")
-        self.assertEqual(f.value.where, "<RootUnslicer>")
-        self.assertTrue(f.value.args[0].startswith("token prefix is limited to 64 bytes"))
+        limit65 = PREFIX_LIMIT + 1
 
-        self.check("a", "\x01\x82a")
-        self.check("b"*130, "\x02\x01\x82" + "b"*130 + "extra")
-        self.check("c"*1025, "\x01\x08\x82" + "c" * 1025 + "extra")
-        self.check("fluuber", bSTR("fluuber"))
+        f = self.shouldDropConnection(b'\x00' * limit65)
+        self.assertEqual(f.value.where, '<RootUnslicer>')
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
 
+        f = self.shouldDropConnection(b'\x00' * limit65 + STRING)
+        self.assertEqual(f.value.where, '<RootUnslicer>')
+        self.assertTrue(f.value.args[0].startswith('token prefix is limited to {} bytes'.format(PREFIX_LIMIT)))
+
+        self.check('a',        b'\x01' + STRING + b'a')
+        self.check('b' * 130,  b'\x02\x01' + STRING + b'b' * 130  + b'extra')
+        self.check('c' * 1025, b'\x01\x08' + STRING + b'c' * 1025 + b'extra')
+        self.check('fluuber', bSTR('fluuber'))
 
     def testList(self):
-        self.check([1,2],
-                   join(bOPEN('list',1),
-                        bINT(1), bINT(2),
+        self.check([1, 2],
+                   join(bOPEN(b'list', 1),
+                         bINT(1), bINT(2),
                         bCLOSE(1)))
-        self.check([1,"b"],
-                   join(bOPEN('list',1), bINT(1),
-                        "\x01\x82b",
+
+        self.check([1, 'b'],
+                   join(bOPEN(b'list', 1), bINT(1),
+                         b'\x01' + STRING + b'b',
                         bCLOSE(1)))
-        self.check([1,2,[3,4]],
-                   join(bOPEN('list',1), bINT(1), bINT(2),
-                         bOPEN('list',2), bINT(3), bINT(4),
+
+        self.check([1, 2, [3, 4]],
+                   join(bOPEN(b'list', 1), bINT(1), bINT(2),
+                         bOPEN(b'list', 2), bINT(3), bINT(4),
                          bCLOSE(2),
                         bCLOSE(1)))
 
     def testTuple(self):
-        self.check((1,2),
-                   join(bOPEN('tuple',1), bINT(1), bINT(2),
+        self.check((1, 2),
+                   join(bOPEN(b'tuple', 1), bINT(1), bINT(2),
                         bCLOSE(1)))
 
     def testDict(self):
-        self.check({1:"a", 2:["b","c"]},
-                   join(bOPEN('dict',1),
-                        bINT(1), bSTR("a"),
-                        bINT(2), bOPEN('list',2),
-                         bSTR("b"), bSTR("c"),
-                        bCLOSE(2),
+        self.check({1: 'a', 2: ['b', 'c']},
+                   join(bOPEN(b'dict', 1),
+                         bINT(1), bSTR('a'),
+                         bINT(2), bOPEN(b'list', 2),
+                                   bSTR('b'), bSTR('c'),
+                                  bCLOSE(2),
                         bCLOSE(1)))
 
-    def TRUE(self):
-        return join(bOPEN("boolean",2), bINT(1), bCLOSE(2))
-    def FALSE(self):
-        return join(bOPEN("boolean",2), bINT(0), bCLOSE(2))
-
-    def testBool(self):
-        self.check(True, self.TRUE())
-        self.check(False, self.FALSE())
 
 class InboundByteStream2(TestBananaMixin, unittest.TestCase):
-
     def setConstraints(self, constraint, childConstraint):
         if constraint:
             constraint = IConstraint(constraint)
@@ -1431,232 +1684,166 @@ class InboundByteStream2(TestBananaMixin, unittest.TestCase):
         self.assertEqual(f.value.where, where)
         self.assertEqual(len(self.banana.receiveStack), 1)
 
-    def testConstrainedInt(self):
-        pass # TODO: after implementing new LONGINT token
-
     def testConstrainedString(self):
-        self.conform2("\x82", "",
-                    schema.StringConstraint(10))
-        self.conform2("\x0a\x82" + "a"*10 + "extra", "a"*10,
-                    schema.StringConstraint(10))
-        self.violate2("\x0b\x82" + "a"*11 + "extra",
-                      "<RootUnslicer>",
-                      schema.StringConstraint(10))
-
-    def NOTtestFoo(self):
-        if 0:
-            a100 = chr(100) + "\x82" + "a"*100
-            b100 = chr(100) + "\x82" + "b"*100
-            self.violate2(join(bOPEN('list',1),
-                               bOPEN('list',2), a100, b100, bCLOSE(2),
-                               bCLOSE(1)),
-                          "<RootUnslicer>.[0].[0]",
-                          schema.ListOf(
-                schema.ListOf(schema.StringConstraint(99), 2), 2))
-
-        def OPENweird(count, weird):
-            return chr(count) + "\x88" + weird
-
-        self.violate2(join(bOPEN('list',1),
-                           bOPEN('list',2),
-                           OPENweird(3, bINT(64)),
-                           bINT(1), bINT(2), bCLOSE(3),
-                           bCLOSE(2),
-                           bCLOSE(1)),
-                      "<RootUnslicer>.[0].[0]", None)
-
-
+        self.conform2(STRING, '', schema.StringConstraint(10))
+        self.conform2(b'\x0a' + STRING + b'a' * 10 + b'extra', 'a' * 10,         schema.StringConstraint(10))
+        self.violate2(b'\x0b' + STRING + b'a' * 11 + b'extra', '<RootUnslicer>', schema.StringConstraint(10, charset='ascii'))
 
     def testConstrainedList(self):
-        self.conform2(join(bOPEN('list',1), bINT(1), bINT(2),
-                           bCLOSE(1)),
-                      [1,2],
+        self.conform2(join(bOPEN(b'list' ,1), bINT(1), bINT(2), bCLOSE(1)),
+                      [1, 2],
                       schema.ListOf(int))
-        self.violate2(join(bOPEN('list',1), bINT(1), "\x01\x82b",
-                           bCLOSE(1)),
-                      "<RootUnslicer>.[1]",
+        self.violate2(join(bOPEN(b'list', 1), bINT(1), b'\x01' + STRING + b'b', bCLOSE(1)),
+                      '<RootUnslicer>.[1]',
                       schema.ListOf(int))
-        self.conform2(join(bOPEN('list',1),
-                            bINT(1), bINT(2), bINT(3),
-                           bCLOSE(1)),
-                      [1,2,3],
+        self.conform2(join(bOPEN(b'list', 1), bINT(1), bINT(2), bINT(3), bCLOSE(1)),
+                      [1, 2, 3],
                       schema.ListOf(int, maxLength=3))
-        self.violate2(join(bOPEN('list',1),
-                            bINT(1), bINT(2), bINT(3), bINT(4),
-                           bCLOSE(1)),
-                      "<RootUnslicer>.[3]",
+        self.violate2(join(bOPEN(b'list', 1), bINT(1), bINT(2), bINT(3), bINT(4), bCLOSE(1)),
+                      '<RootUnslicer>.[3]',
                       schema.ListOf(int, maxLength=3))
-        a100 = chr(100) + "\x82" + "a"*100
-        b100 = chr(100) + "\x82" + "b"*100
-        self.conform2(join(bOPEN('list',1), a100, b100, bCLOSE(1)),
-                      ["a"*100, "b"*100],
+
+        a100 = bytes([100]) + STRING + b'a' * 100
+        b100 = bytes([100]) + STRING + b'b' * 100
+
+        self.conform2(join(bOPEN(b'list', 1), a100, b100, bCLOSE(1)),
+                      ['a' * 100, 'b' * 100],
                       schema.ListOf(schema.StringConstraint(100), 2))
-        self.violate2(join(bOPEN('list',1), a100, b100, bCLOSE(1)),
-                      "<RootUnslicer>.[0]",
-                      schema.ListOf(schema.StringConstraint(99), 2))
-        self.violate2(join(bOPEN('list',1), a100, b100, a100, bCLOSE(1)),
-                      "<RootUnslicer>.[2]",
+        self.violate2(join(bOPEN(b'list', 1), a100, b100, bCLOSE(1)),
+                      '<RootUnslicer>.[0]',
+                      schema.ListOf(schema.StringConstraint(99, charset='ascii'), 2))
+        self.violate2(join(bOPEN(b'list', 1), a100, b100, a100, bCLOSE(1)),
+                      '<RootUnslicer>.[2]',
                       schema.ListOf(schema.StringConstraint(100), 2))
 
-        self.conform2(join(bOPEN('list',1),
-                            bOPEN('list',2),
-                             bINT(11), bINT(12),
-                            bCLOSE(2),
-                            bOPEN('list',3),
-                             bINT(21), bINT(22), bINT(23),
-                            bCLOSE(3),
+        self.conform2(join(bOPEN(b'list', 1),
+                             bOPEN(b'list', 2), bINT(11), bINT(12), bCLOSE(2),
+                             bOPEN(b'list', 3), bINT(21), bINT(22), bINT(23), bCLOSE(3),
                            bCLOSE(1)),
-                      [[11,12], [21, 22, 23]],
+                      [[11, 12], [21, 22, 23]],
                       schema.ListOf(schema.ListOf(int, maxLength=3)))
 
-        self.violate2(join(bOPEN('list',1),
-                            bOPEN('list',2),
-                             bINT(11), bINT(12),
-                            bCLOSE(2),
-                            bOPEN('list',3),
-                             bINT(21), bINT(22), bINT(23),
-                            bCLOSE(3),
+        self.violate2(join(bOPEN(b'list', 1),
+                             bOPEN(b'list', 2), bINT(11), bINT(12), bCLOSE(2),
+                             bOPEN(b'list', 3), bINT(21), bINT(22), bINT(23), bCLOSE(3),
                            bCLOSE(1)),
-                      "<RootUnslicer>.[1].[2]",
+                      '<RootUnslicer>.[1].[2]',
                       schema.ListOf(schema.ListOf(int, maxLength=2)))
 
     def testConstrainedTuple(self):
-        self.conform2(join(bOPEN('tuple',1), bINT(1), bINT(2),
-                           bCLOSE(1)),
-                      (1,2),
+        self.conform2(join(bOPEN(b'tuple', 1), bINT(1), bINT(2), bCLOSE(1)),
+                      (1, 2),
                       schema.TupleOf(int, int))
-        self.violate2(join(bOPEN('tuple',1),
-                           bINT(1), bINT(2), bINT(3),
-                           bCLOSE(1)),
-                      "<RootUnslicer>.[2]",
+        self.violate2(join(bOPEN(b'tuple', 1), bINT(1), bINT(2), bINT(3), bCLOSE(1)),
+                      '<RootUnslicer>.[2]',
                       schema.TupleOf(int, int))
-        self.violate2(join(bOPEN('tuple',1),
-                           bINT(1), bSTR("not a number"),
-                           bCLOSE(1)),
-                      "<RootUnslicer>.[1]",
+        self.violate2(join(bOPEN(b'tuple', 1), bINT(1), bSTR('not a number'), bCLOSE(1)),
+                      '<RootUnslicer>.[1]',
                       schema.TupleOf(int, int))
-        self.conform2(join(bOPEN('tuple',1),
-                           bINT(1), bSTR("twine"),
-                           bCLOSE(1)),
-                      (1, "twine"),
+        self.conform2(join(bOPEN(b'tuple', 1), bINT(1), bSTR('twine'), bCLOSE(1)),
+                      (1, 'twine'),
                       schema.TupleOf(int, str))
-        self.conform2(join(bOPEN('tuple',1),
-                           bINT(1),
-                            bOPEN('list',2),
-                             bINT(1), bINT(2), bINT(3),
-                            bCLOSE(2),
+        self.conform2(join(bOPEN(b'tuple', 1),
+                            bINT(1),
+                            bOPEN(b'list', 2), bINT(1), bINT(2), bINT(3), bCLOSE(2),
                            bCLOSE(1)),
-                      (1, [1,2,3]),
+                      (1, [1, 2, 3]),
                       schema.TupleOf(int, schema.ListOf(int)))
-        self.conform2(join(bOPEN('tuple',1),
-                           bINT(1),
-                            bOPEN('list',2),
-                             bOPEN('list',3), bINT(2), bCLOSE(3),
-                             bOPEN('list',4), bINT(3), bCLOSE(4),
+        self.conform2(join(bOPEN(b'tuple', 1),
+                            bINT(1),
+                            bOPEN(b'list', 2),
+                             bOPEN(b'list', 3), bINT(2), bCLOSE(3),
+                             bOPEN(b'list', 4), bINT(3), bCLOSE(4),
                             bCLOSE(2),
                            bCLOSE(1)),
                       (1, [[2], [3]]),
                       schema.TupleOf(int, schema.ListOf(schema.ListOf(int))))
-        self.violate2(join(bOPEN('tuple',1),
-                           bINT(1),
-                            bOPEN('list',2),
-                             bOPEN('list',3),
-                              bSTR("nan"),
-                             bCLOSE(3),
-                             bOPEN('list',4), bINT(3), bCLOSE(4),
+        self.violate2(join(bOPEN(b'tuple', 1),
+                            bINT(1),
+                            bOPEN(b'list', 2),
+                             bOPEN(b'list', 3), bSTR('nan'), bCLOSE(3),
+                             bOPEN(b'list', 4), bINT(3), bCLOSE(4),
                             bCLOSE(2),
                            bCLOSE(1)),
-                      "<RootUnslicer>.[1].[0].[0]",
+                      '<RootUnslicer>.[1].[0].[0]',
                       schema.TupleOf(int, schema.ListOf(schema.ListOf(int))))
 
     def testConstrainedDict(self):
-        self.conform2(join(bOPEN('dict',1),
-                           bINT(1), bSTR("a"),
-                           bINT(2), bSTR("b"),
-                           bINT(3), bSTR("c"),
+        self.conform2(join(bOPEN(b'dict', 1),
+                             bINT(1), bSTR('a'),
+                             bINT(2), bSTR('b'),
+                             bINT(3), bSTR('c'),
                            bCLOSE(1)),
-                      {1:"a", 2:"b", 3:"c"},
+                      {1: 'a', 2: 'b', 3: 'c'},
                       schema.DictOf(int, str))
-        self.conform2(join(bOPEN('dict',1),
-                           bINT(1), bSTR("a"),
-                           bINT(2), bSTR("b"),
-                           bINT(3), bSTR("c"),
+
+        self.conform2(join(bOPEN(b'dict', 1),
+                             bINT(1), bSTR('a'),
+                             bINT(2), bSTR('b'),
+                             bINT(3), bSTR('c'),
                            bCLOSE(1)),
-                      {1:"a", 2:"b", 3:"c"},
+                      {1: 'a', 2: 'b', 3: 'c'},
                       schema.DictOf(int, str, maxKeys=3))
-        self.violate2(join(bOPEN('dict',1),
-                           bINT(1), bSTR("a"),
+
+        self.violate2(join(bOPEN(b'dict', 1),
+                           bINT(1), bSTR('a'),
                            bINT(2), bINT(10),
-                           bINT(3), bSTR("c"),
+                           bINT(3), bSTR('c'),
                            bCLOSE(1)),
-                      "<RootUnslicer>.{}[2]",
+                      '<RootUnslicer>.{}[2]',
                       schema.DictOf(int, str))
-        self.violate2(join(bOPEN('dict',1),
-                           bINT(1), bSTR("a"),
-                           bINT(2), bSTR("b"),
-                           bINT(3), bSTR("c"),
+
+        self.violate2(join(bOPEN(b'dict', 1),
+                           bINT(1), bSTR('a'),
+                           bINT(2), bSTR('b'),
+                           bINT(3), bSTR('c'),
                            bCLOSE(1)),
-                      "<RootUnslicer>.{}",
+                      '<RootUnslicer>.{}',
                       schema.DictOf(int, str, maxKeys=2))
 
     def TRUE(self):
-        return join(bOPEN("boolean",2), bINT(1), bCLOSE(2))
+        return join(bOPEN(b'boolean',2), bINT(1), bCLOSE(2))
+
     def FALSE(self):
-        return join(bOPEN("boolean",2), bINT(0), bCLOSE(2))
+        return join(bOPEN(b'boolean',2), bINT(0), bCLOSE(2))
 
     def testConstrainedBool(self):
-        self.conform2(self.TRUE(),
-                      True,
-                      bool)
-        self.conform2(self.TRUE(),
-                      True,
-                      schema.BooleanConstraint())
-        self.conform2(self.FALSE(),
-                      False,
-                      schema.BooleanConstraint())
+        self.conform2(self.TRUE(), True, bool)
+        self.conform2(self.TRUE(), True, schema.BooleanConstraint())
+        self.conform2(self.FALSE(), False, schema.BooleanConstraint())
 
         # booleans have ints, not strings. To do otherwise is a protocol
         # error, not a schema Violation.
-        f = self.shouldDropConnection(join(bOPEN("boolean",1),
-                                            bSTR("vrai"),
-                                           bCLOSE(1)))
-        self.assertEqual(f.value.args[0],
-                         "BooleanUnslicer only accepts an INT token")
+        f = self.shouldDropConnection(join(bOPEN(b'boolean',1), bSTR('vrai'), bCLOSE(1)))
+        self.assertEqual(f.value.args[0], 'BooleanUnslicer only accepts an INT token')
 
         # but true/false is a constraint, and is reported with Violation
-        self.violate2(self.TRUE(),
-                      "<RootUnslicer>.<bool>",
-                      schema.BooleanConstraint(False))
-        self.violate2(self.FALSE(),
-                      "<RootUnslicer>.<bool>",
-                      schema.BooleanConstraint(True))
+        self.violate2(self.TRUE(),  '<RootUnslicer>.<bool>', schema.BooleanConstraint(False))
+        self.violate2(self.FALSE(), '<RootUnslicer>.<bool>', schema.BooleanConstraint(True))
 
 
 class A:
-    """
-    dummy class
-    """
-    def amethod(self):
-        pass
-    def __cmp__(self, other):
-        if not type(other) == type(self):
-            return -1
-        return cmp(self.__dict__, other.__dict__)
+    """Dummy class"""
 
-class B(object):
-    # new-style class
     def amethod(self):
         pass
-    def __cmp__(self, other):
-        if not type(other) == type(self):
-            return -1
-        return cmp(self.__dict__, other.__dict__)
+
+    def __eq__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ == other.__dict__
+        return NotImplemented
+
+    def __lt__(self, other):
+        if type(other) is type(self):
+            return self.__dict__ < other.__dict__
+        return NotImplemented
+
 
 def afunc(self):
     pass
 
-class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
 
+class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
     def test_int(self):
         d = self.looptest(42)
         d.addCallback(lambda res: self.looptest(-47))
@@ -1665,18 +1852,18 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
     def test_bigint(self):
         # some of these are small enough to fit in an INT
         d = self.looptest(int(2**31-1)) # most positive representable number
-        d.addCallback(lambda res: self.looptest(long(2**31+0)))
-        d.addCallback(lambda res: self.looptest(long(2**31+1)))
+        d.addCallback(lambda res: self.looptest(int(2**31+0)))
+        d.addCallback(lambda res: self.looptest(int(2**31+1)))
 
-        d.addCallback(lambda res: self.looptest(long(-2**31-1)))
+        d.addCallback(lambda res: self.looptest(int(-2**31-1)))
         # the following is the most negative representable number
         d.addCallback(lambda res: self.looptest(int(-2**31+0)))
         d.addCallback(lambda res: self.looptest(int(-2**31+1)))
 
-        d.addCallback(lambda res: self.looptest(long(2**100)))
-        d.addCallback(lambda res: self.looptest(long(-2**100)))
-        d.addCallback(lambda res: self.looptest(long(2**1000)))
-        d.addCallback(lambda res: self.looptest(long(-2**1000)))
+        d.addCallback(lambda res: self.looptest(int( 2**100)))
+        d.addCallback(lambda res: self.looptest(int(-2**100)))
+#       d.addCallback(lambda res: self.looptest(int( 2**1000)))
+#       d.addCallback(lambda res: self.looptest(int(-2**1000)))
         return d
 
     def test_decimal(self):
@@ -1702,12 +1889,16 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
 
     def test_string(self):
         return self.looptest("biggles")
+
     def test_unicode(self):
         return self.looptest(u"biggles\u1234")
+
     def test_list(self):
         return self.looptest([1,2])
+
     def test_tuple(self):
         return self.looptest((1,2))
+
     def test_set(self):
         d = self.looptest(set([1,2]))
         d.addCallback(lambda res: self.looptest(frozenset([1,2])))
@@ -1717,62 +1908,45 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
         d = self.looptest(True)
         d.addCallback(lambda res: self.looptest(False))
         return d
+
     def test_float(self):
         return self.looptest(20.3)
+
     def test_none(self):
         d = self.loop(None)
         d.addCallback(lambda n2: self.assertTrue(n2 is None))
         return d
+
     def test_dict(self):
         return self.looptest({'a':1})
 
     def test_func(self):
         return self.looptest(afunc)
+
     def test_module(self):
         return self.looptest(unittest)
+
     def test_instance(self):
         a = A()
         return self.looptest(a)
-    def test_instance_newstyle(self):
-        raise unittest.SkipTest("new-style classes still broken")
-        b = B()
-        return self.looptest(b)
 
     def test_class(self):
         return self.looptest(A)
-    def test_class_newstyle(self):
-        raise unittest.SkipTest("new-style classes still broken")
-        return self.looptest(B)
 
     def test_boundMethod(self):
         a = A()
         m1 = a.amethod
         d = self.loop(m1)
-        d.addCallback(self._test_boundMethod_1, m1)
-        return d
-    def _test_boundMethod_1(self, m2, m1):
-        self.assertEqual(m1.im_class, m2.im_class)
-        self.assertEqual(m1.im_self, m2.im_self)
-        self.assertEqual(m1.im_func, m2.im_func)
 
-    def test_boundMethod_newstyle(self):
-        raise unittest.SkipTest("new-style classes still broken")
-        b = B()
-        m1 = b.amethod
-        d = self.loop(m1)
-        d.addCallback(self._test_boundMethod_newstyle, m1)
-        return d
-    def _test_boundMethod_newstyle(self, m2, m1):
-        self.assertEqual(m1.im_class, m2.im_class)
-        self.assertEqual(m1.im_self, m2.im_self)
-        self.assertEqual(m1.im_func, m2.im_func)
+        def test(m2, m1):
+            self.assertEqual(m1.__class__, m2.__class__)
+            self.assertEqual(m1.__self__,  m2.__self__)
+            self.assertEqual(m1.__func__,  m2.__func__)
+
+        return d.addCallback(test, m1)
 
     def test_classMethod(self):
         return self.looptest(A.amethod)
-
-    def test_classMethod_newstyle(self):
-        raise unittest.SkipTest("new-style classes still broken")
-        return self.looptest(B.amethod)
 
     # some stuff from test_newjelly
     def testIdentity(self):
@@ -1787,18 +1961,10 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
         d.addCallback(self.shouldDecode)
         d.addCallback(self._testIdentity_1)
         return d
+
     def _testIdentity_1(self, z):
         self.assertIdentical(z[0], z[1])
         self.assertIdentical(z[0][0], z)
-
-    def testUnicode(self):
-        x = [unicode('blah')]
-        d = self.loop(x)
-        d.addCallback(self._testUnicode_1, x)
-        return d
-    def _testUnicode_1(self, y, x):
-        self.assertEqual(x, y)
-        self.assertEqual(type(x[0]), type(y[0]))
 
     def testStressReferences(self):
         reref = []
@@ -1807,6 +1973,7 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
         d = self.loop(toplevelTuple)
         d.addCallback(self._testStressReferences_1)
         return d
+
     def _testStressReferences_1(self, z):
         self.assertIdentical(z[0]['list'], z[1])
         self.assertIdentical(z[0]['list'][0], z)
@@ -1874,6 +2041,7 @@ class ThereAndBackAgain(TestBananaMixin, unittest.TestCase):
         d = self.loop(t1)
         d.addCallback(lambda z: self.assertIdentical(list(list(list(z)[0])[0])[0], z))
         return d
+
     del test_cycles_3
 
 
@@ -1882,11 +2050,14 @@ class VocabTest1(unittest.TestCase):
     def test_incoming1(self):
         b = TokenBanana()
         b.connectionMade()
-        vdict = {1: 'list', 2: 'tuple', 3: 'dict'}
-        setVdict = [tOPEN(0),'set-vocab']
+
+        vdict = {1: b'list', 2: b'tuple', 3: b'dict'}
+        setVdict = [tOPEN(0), b'set-vocab']
+
         for k in sorted(vdict.keys()):
             setVdict.append(k)
             setVdict.append(vdict[k])
+
         setVdict.append(tCLOSE(0))
         b.dataReceived(untokenize(setVdict))
         # banana should now know this vocabulary
@@ -1896,12 +2067,15 @@ class VocabTest1(unittest.TestCase):
         b = TokenBanana()
         b.connectionMade()
         b.tokens = []
-        strings = ["list", "tuple", "dict"]
-        vdict = {0: 'list', 1: 'tuple', 2: 'dict'}
-        setVdict = [tOPEN(0),'set-vocab']
+
+        strings  = [b'list', b'tuple', b'dict']
+        vdict    = {0: b'list', 1: b'tuple', 2: b'dict'}
+        setVdict = [tOPEN(0), b'set-vocab']
+
         for k in sorted(vdict.keys()):
             setVdict.append(k)
             setVdict.append(vdict[k])
+
         setVdict.append(tCLOSE(0))
         b.setOutgoingVocabulary(strings)
         vocabTokens = b.tokens
@@ -1911,22 +2085,28 @@ class VocabTest1(unittest.TestCase):
         # make sure that we don't change any published vocab tables, and that
         # we don't change the hash algorithm that they use
         hash_v0 = vocab.hashVocabTable(0)
-        self.assertEqual(hash_v0, "da39")
+        self.assertEqual(hash_v0, 'da39a3ee')
+
         hash_v1 = vocab.hashVocabTable(1)
-        self.assertEqual(hash_v1, "bb33")
+        self.assertEqual(hash_v1, 'bb3393bb')
+
+        hash_v1 = vocab.hashVocabTable(191)
+        self.assertEqual(hash_v1, 'c55dc3b2')
 
 
 class VocabTest2(TestBananaMixin, unittest.TestCase):
     def vbOPEN(self, count, opentype):
         num = self.invdict[opentype]
-        return chr(count) + "\x88" + chr(num) + "\x87"
+        return bytes([count]) + OPEN + bytes([num]) + BVOCAB
 
     def test_loop(self):
-        strings = ["list", "tuple", "dict"]
-        vdict = {0: 'list', 1: 'tuple', 2: 'dict'}
+        strings = [b'list', b'tuple', b'dict']
+        vdict   = {0: b'list', 1: b'tuple', 2: b'dict'}
+
         self.invdict = dict(list(zip(list(vdict.values()), list(vdict.keys()))))
 
         self.banana.setOutgoingVocabulary(strings)
+
         # this next check only happens to work because there is nothing to
         # keep serialization from completing synchronously. If Banana
         # acquires some eventual-sends, this test might need to be rewritten.
@@ -1936,15 +2116,15 @@ class VocabTest2(TestBananaMixin, unittest.TestCase):
         self.clearOutput()
 
         vbOPEN = self.vbOPEN
-        expected = "".join([vbOPEN(1,"list"),
-                             vbOPEN(2,"tuple"),
-                              vbOPEN(3,"dict"),
-                               bSTR('a'), bINT(1),
-                              bCLOSE(3),
-                             bCLOSE(2),
+        expected = b''.join([vbOPEN(1, b'list'),
+                              vbOPEN(2, b'tuple'),
+                               vbOPEN(3, b'dict'), bSTR('a'), bINT(1), bCLOSE(3),
+                              bCLOSE(2),
                             bCLOSE(1)])
-        d = self.encode([({'a':1},)])
+
+        d = self.encode([({'a': 1},)])
         d.addCallback(self.wantEqual, expected)
+
         return d
 
 
@@ -1966,12 +2146,15 @@ class _AndICanHelp(slicer.BaseSlicer):
         yield {"value": self.obj.value}
 registerAdapter(_AndICanHelp, CouldBeSliceable, ISlicer)
 
+
 class Sliceable(unittest.TestCase):
     def setUp(self):
         self.banana = TokenBanana()
         self.banana.connectionMade()
+
     def do(self, obj):
         return self.banana.testSlice(obj)
+
     def tearDown(self):
         self.assertTrue(len(self.banana.slicerStack) == 1)
         self.assertTrue(isinstance(self.banana.slicerStack[0][0], RootSlicer))
@@ -1982,7 +2165,7 @@ class Sliceable(unittest.TestCase):
         d = self.do(i)
         d.addCallback(self.assertEqual,
                       [tOPEN(0),
-                       tOPEN(1), "dict", "value", 42, tCLOSE(1),
+                        tOPEN(1), b'dict', 'value', 42, tCLOSE(1),
                        tCLOSE(0)])
         return d
 
@@ -1992,7 +2175,7 @@ class Sliceable(unittest.TestCase):
         d = self.do(i)
         d.addCallback(self.assertEqual,
                       [tOPEN(0),
-                       tOPEN(1), "dict", "value", 43, tCLOSE(1),
+                        tOPEN(1), b'dict', 'value', 43, tCLOSE(1),
                        tCLOSE(0)])
         return d
 

@@ -9,6 +9,7 @@ from . import tokens
 from .tokens import Violation, BananaError
 from foolscap.ipb import IBroker
 
+
 class SlicerClass(type):
     # auto-register Slicers
     def __init__(self, name, bases, dict):
@@ -225,7 +226,6 @@ class BaseUnslicer(metaclass=UnslicerClass):
     def finish(self):
         pass
 
-
     def setObject(self, counter, obj):
         """To pass references to previously-sent objects, the [OPEN,
         'reference', number, CLOSE] sequence is used. The numbers are
@@ -321,13 +321,17 @@ class ReferenceUnslicer(LeafUnslicer):
     def receiveChild(self, obj, ready_deferred=None):
         assert not isinstance(obj, Deferred)
         assert ready_deferred is None
+
         if self.finished:
             raise BananaError("ReferenceUnslicer only accepts one int")
+
         self.obj = self.protocol.getObject(obj)
         self.finished = True
+
         # assert that this conforms to the constraint
         if self.constraint:
             self.constraint.checkObject(self.obj, True)
+
         # TODO: it might be a Deferred, but we should know enough about the
         # incoming value to check the constraint. This requires a subclass
         # of Deferred which can give us the metadata.

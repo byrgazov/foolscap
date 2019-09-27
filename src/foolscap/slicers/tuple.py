@@ -16,8 +16,9 @@ class TupleSlicer(ListSlicer):
 class TupleUnslicer(BaseUnslicer):
     opentype = (b"tuple",)
 
-    debug = False
+    debug   = False
     constraints = None
+    content = None
 
     def setConstraint(self, constraint):
         if isinstance(constraint, Any):
@@ -26,13 +27,13 @@ class TupleUnslicer(BaseUnslicer):
         self.constraints = constraint.constraints
 
     def start(self, count):
-        self.list = []
-        # indices of .list which are unfilled because of children that could
+        self.content = []
+        # indices of .content which are unfilled because of children that could
         # not yet be referenced
         self.num_unreferenceable_children = 0
         self.count = count
         if self.debug:
-            print("%s[%d].start with %s" % (self, self.count, self.list))
+            print("%s[%d].start with %s" % (self, self.count, self.content))
         self.finished = False
         self.deferred = Deferred()
         self.protocol.setObject(count, self.deferred)
@@ -41,12 +42,12 @@ class TupleUnslicer(BaseUnslicer):
     def checkToken(self, typebyte, size):
         if self.constraints == None:
             return
-        if len(self.list) >= len(self.constraints):
+        if len(self.content) >= len(self.constraints):
             raise Violation("the tuple is full")
-        self.constraints[len(self.list)].checkToken(typebyte, size)
+        self.constraints[len(self.content)].checkToken(typebyte, size)
 
     def doOpen(self, opentype):
-        where = len(self.list)
+        where = len(self.content)
         if self.constraints != None:
             if where >= len(self.constraints):
                 raise Violation("the tuple is full")
@@ -60,7 +61,7 @@ class TupleUnslicer(BaseUnslicer):
     def update(self, obj, index):
         if self.debug:
             print("%s[%d].update: [%d]=%s" % (self, self.count, index, obj))
-        self.list[index] = obj
+        self.content[index] = obj
         self.num_unreferenceable_children -= 1
         if self.finished:
             self.checkComplete()
@@ -70,12 +71,12 @@ class TupleUnslicer(BaseUnslicer):
         if ready_deferred:
             self._ready_deferreds.append(ready_deferred)
         if isinstance(obj, Deferred):
-            obj.addCallback(self.update, len(self.list))
+            obj.addCallback(self.update, len(self.content))
             obj.addErrback(self.explode)
             self.num_unreferenceable_children += 1
-            self.list.append("placeholder")
+            self.content.append("placeholder")
         else:
-            self.list.append(obj)
+            self.content.append(obj)
 
     def checkComplete(self):
         if self.debug:
@@ -95,7 +96,7 @@ class TupleUnslicer(BaseUnslicer):
         if self._ready_deferreds:
             ready_deferred = AsyncAND(self._ready_deferreds)
 
-        t = tuple(self.list)
+        t = tuple(self.content)
         if self.debug:
             print(" finished! tuple:%s{%s}" % (t, id(t)))
         self.protocol.setObject(self.count, t)
@@ -120,7 +121,9 @@ class TupleUnslicer(BaseUnslicer):
         return self.complete()
 
     def describe(self):
-        return "[%d]" % len(self.list)
+        if self.content is None:
+            return '[-]'
+        return '[{:d}]'.format(len(self.content))
 
 
 class TupleConstraint(OpenerConstraint):

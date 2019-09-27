@@ -28,7 +28,9 @@ class ListUnslicer(BaseUnslicer):
     def setConstraint(self, constraint):
         if isinstance(constraint, Any):
             return
+
         assert isinstance(constraint, ListConstraint)
+
         self.maxLength = constraint.maxLength
         self.itemConstraint = constraint.constraint
 
@@ -135,8 +137,8 @@ class ListConstraint(OpenerConstraint):
     accept lists of any length, use maxLength=None. All member objects must
     obey the given constraint."""
 
-    opentypes = [(b"list",)]
-    name = "ListConstraint"
+    opentypes = [(b'list',)]
+    name = 'ListConstraint'
 
     def __init__(self, constraint, maxLength=None, minLength=0):
         self.constraint = IConstraint(constraint)
@@ -146,9 +148,12 @@ class ListConstraint(OpenerConstraint):
     def checkObject(self, obj, inbound):
         if not isinstance(obj, list):
             raise Violation("not a list")
+
         if self.maxLength is not None and len(obj) > self.maxLength:
             raise Violation("list too long")
+
         if len(obj) < self.minLength:
             raise Violation("list too short")
+
         for o in obj:
             self.constraint.checkObject(o, inbound)

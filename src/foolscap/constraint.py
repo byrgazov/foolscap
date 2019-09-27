@@ -6,6 +6,7 @@
 # This imports foolscap.tokens, but no other Foolscap modules.
 
 import re
+import codecs
 
 from zope.interface import implementer, Interface
 
@@ -244,21 +245,30 @@ class StringConstraint(Constraint):
 
 # [bw] strictTaster = True
     opentypes = [] # redundant, as taster doesn't accept OPEN
-    name   = "StringConstraint"
+    name   = 'StringConstraint'
     regexp = None
 
-    def __init__(self, maxLength=None, minLength=0, regexp=None):
+    def __init__(self, maxLength=None, minLength=0, regexp=None, charset='utf8'):
         self.maxLength = maxLength
         self.minLength = minLength
 
         if regexp:
             self.regexp = re.compile(regexp)
 
-        self.taster = {
-            # @xxx: expected UTF-8 encoded string
-            STRING: self.maxLength * 4 if self.maxLength is not None else None,
-            SVOCAB: None,
-        }
+        self.taster = {SVOCAB: None}
+
+        if self.maxLength:
+            # @xxx: charset
+            if charset:
+                # @xxx: fix size charset
+                charset = codecs.lookup(charset).name
+                scale = 1 if charset in ('ascii', 'koi8-r', 'cp866', 'cp1251') else 4
+            else:
+                scale = 4
+
+            self.taster[STRING] = self.maxLength * scale
+        else:
+            self.taster[STRING] = None
 
     def checkObject(self, obj, inbound):
         if not isinstance(obj, str):
