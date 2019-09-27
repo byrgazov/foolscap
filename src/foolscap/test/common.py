@@ -1,29 +1,32 @@
 # -*- test-case-name: foolscap.test.test_pb -*-
 
 import re, time
-from past.builtins import long
+
 from zope.interface import implementer, implementer_only, implementedBy, Interface
+
 from twisted.python import log
 from twisted.internet import defer, reactor, task, protocol
 from twisted.application import internet
 from twisted.trial import unittest
+
 from foolscap import broker, eventual, negotiate
-from foolscap.api import Tub, Referenceable, RemoteInterface, \
-     eventually, fireEventually, flushEventualQueue
-from foolscap.remoteinterface import getRemoteInterface, RemoteMethodSchema, \
-     UnconstrainedMethod
-from foolscap.schema import Any, SetOf, DictOf, ListOf, TupleOf, \
-     NumberConstraint, ByteStringConstraint, IntegerConstraint, \
-     UnicodeConstraint, ChoiceOf
+from foolscap.api import Tub, Referenceable, RemoteInterface, eventually, fireEventually, flushEventualQueue
+from foolscap.remoteinterface import getRemoteInterface, RemoteMethodSchema, UnconstrainedMethod
+
+from foolscap.schema import Any, SetOf, DictOf, ListOf, TupleOf, ChoiceOf
+from foolscap.schema import NumberConstraint, ByteStringConstraint, StringConstraint, IntegerConstraint
+
 from foolscap.referenceable import TubRef
 from foolscap.util import allocate_tcp_port
 
 from twisted.python import failure
 from twisted.internet.main import CONNECTION_DONE
 
+
 def getRemoteInterfaceName(obj):
     i = getRemoteInterface(obj)
     return i.__remote_name__
+
 
 class Loopback:
     # The transport's promise is that write() can be treated as a
@@ -69,27 +72,24 @@ class Loopback:
     def getHost(self):
         return broker.LoopbackAddress()
 
-Digits = re.compile("\d*")
-MegaSchema1 = DictOf(str,
-                     ListOf(TupleOf(SetOf(int, maxLength=10, mutable=True),
-                                    str, bool, int, long, float, None,
-                                    UnicodeConstraint(),
-                                    ByteStringConstraint(),
-                                    Any(), NumberConstraint(),
-                                    IntegerConstraint(),
-                                    ByteStringConstraint(maxLength=100,
-                                                         minLength=90,
-                                                         regexp="\w+"),
-                                    ByteStringConstraint(regexp=Digits),
-                                    ),
-                            maxLength=20),
-                     maxKeys=5)
+Digits = re.compile('\d*')
+
+MegaSchema1 = DictOf(str, ListOf(TupleOf(SetOf(int, maxLength=10, mutable=True),
+        bytes, bool, int, float, None,
+        StringConstraint(),
+        ByteStringConstraint(),
+        Any(),
+        NumberConstraint(),
+        IntegerConstraint(),
+        StringConstraint(maxLength=100, minLength=90, regexp='\w+'),
+        StringConstraint(regexp=Digits),
+    ),
+    maxLength=20),
+    maxKeys=5)
+
 # containers should convert their arguments into schemas
-MegaSchema2 = TupleOf(SetOf(int),
-                      ListOf(int),
-                      DictOf(int, str),
-                      )
-MegaSchema3 = ListOf(TupleOf(int,int))
+MegaSchema2 = TupleOf(SetOf(int), ListOf(int), DictOf(int, str))
+MegaSchema3 = ListOf(TupleOf(int, int))
 
 
 class RIHelper(RemoteInterface):
@@ -103,16 +103,19 @@ class RIHelper(RemoteInterface):
     # test one of everything
     def megaschema(obj1=MegaSchema1, obj2=MegaSchema2): return None
     def mega3(obj1=MegaSchema3): return None
-    def choice1(obj1=ChoiceOf(ByteStringConstraint(2000), int)): return None
+    def choice1(obj1=ChoiceOf(StringConstraint(2000), int)): return None
+
 
 @implementer(RIHelper)
 class HelperTarget(Referenceable):
-
     d = None
-    def __init__(self, name="unnamed"):
+
+    def __init__(self, name='unnamed'):
         self.name = name
+
     def __repr__(self):
-        return "<HelperTarget %s>" % self.name
+        return '<HelperTarget %s>' % self.name
+
     def waitfor(self):
         self.d = defer.Deferred()
         return self.d
@@ -122,6 +125,7 @@ class HelperTarget(Referenceable):
         if self.d:
             self.d.callback(obj)
         return True
+
     def remote_set2(self, obj1, obj2):
         self.obj1 = obj1
         self.obj2 = obj2
@@ -147,21 +151,21 @@ class HelperTarget(Referenceable):
     def remote_megaschema(self, obj1, obj2):
         self.obj1 = obj1
         self.obj2 = obj2
-        return None
 
     def remote_mega3(self, obj):
         self.obj = obj
-        return None
 
     def remote_choice1(self, obj):
         self.obj = obj
-        return None
+
 
 class TimeoutError(Exception):
     pass
 
+
 class PollComplete(Exception):
     pass
+
 
 class PollMixin:
 

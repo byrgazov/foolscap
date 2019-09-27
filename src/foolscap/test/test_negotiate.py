@@ -5,16 +5,17 @@ from twisted.internet import protocol, defer, reactor
 from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.application import internet
 from twisted.web.client import Agent
-from foolscap import negotiate, tokens
-from foolscap.api import Referenceable, Tub, BananaError
+
+from foolscap      import negotiate, tokens
+from foolscap.api  import Referenceable, Tub, BananaError
 from foolscap.util import allocate_tcp_port
-from foolscap.test.common import (BaseMixin, PollMixin,
-                                  tubid_low, certData_low,
-                                  certData_high)
+from foolscap.test.common import BaseMixin, PollMixin, tubid_low, certData_low, certData_high
+
 
 class Target(Referenceable):
     def __init__(self):
         self.calls = 0
+
     def remote_call(self):
         self.calls += 1
 
@@ -25,8 +26,8 @@ class OneTimeDeferred(defer.Deferred):
             return
         return defer.Deferred.callback(self, res)
 
-class Basic(BaseMixin, unittest.TestCase):
 
+class Basic(BaseMixin, unittest.TestCase):
     def testOptions(self):
         url, portnum = self.makeServer({'opt': 12})
         self.assertEqual(self.tub._test_options['opt'], 12)
@@ -40,16 +41,16 @@ class Basic(BaseMixin, unittest.TestCase):
         return d
     testAuthenticated.timeout = 10
 
-class Versus(BaseMixin, unittest.TestCase):
 
+class Versus(BaseMixin, unittest.TestCase):
     def testVersusHTTPServerAuthenticated(self):
         portnum = self.makeHTTPServer()
         client = Tub()
         client.startService()
         self.services.append(client)
-        url = "pb://%s@127.0.0.1:%d/target" % (tubid_low, portnum)
+        url = 'pb://%s@127.0.0.1:%d/target' % (tubid_low, portnum)
         d = client.getReference(url)
-        d.addCallbacks(lambda res: self.fail("this is supposed to fail"),
+        d.addCallbacks(lambda res: self.fail('this is supposed to fail'),
                        lambda f: f.trap(BananaError))
         # the HTTP server needs a moment to notice that the connection has
         # gone away. Without this, trial flunks the test because of the
@@ -62,7 +63,7 @@ class Versus(BaseMixin, unittest.TestCase):
     def testVersusHTTPClientAuthenticated(self):
         url, portnum = self.makeServer()
         a = Agent(reactor)
-        response = yield a.request("GET", "http://127.0.0.1:%d/foo" % portnum)
+        response = yield a.request(b'GET', b'http://127.0.0.1:%d/foo' % portnum)
         self.assertEqual(response.code, 500)
     testVersusHTTPClientAuthenticated.timeout = 10
 
@@ -88,10 +89,14 @@ class Versus(BaseMixin, unittest.TestCase):
     def testClientTimeout(self):
         portnum = self.makeNullServer()
         # lower the connection timeout to 2 seconds
+
         client = Tub(_test_options={'connect_timeout': 1})
         client.startService()
+
         self.services.append(client)
+
         url = "pb://faketubid@127.0.0.1:%d/target" % portnum
+
         d = client.getReference(url)
         d.addCallbacks(lambda res: self.fail("hey! this is supposed to fail"),
                        lambda f: f.trap(tokens.NegotiationError))
@@ -105,23 +110,32 @@ class Versus(BaseMixin, unittest.TestCase):
         # is fired, which happens twice (once for the timeout, once for the
         # resulting connectionLost), so we have to make sure the Deferred is
         # only fired once.
+
         d = OneTimeDeferred()
-        options = {'server_timeout': 1,
-                   'debug_negotiationFailed_cb': d.callback
-                   }
+
+        options = {
+            'server_timeout': 1,
+            'debug_negotiationFailed_cb': d.callback
+        }
+
         url, portnum = self.makeServer(listenerOptions=options)
+
         f = protocol.ClientFactory()
         f.protocol = protocol.Protocol # discards everything
-        s = internet.TCPClient("127.0.0.1", portnum, f)
+
+        s = internet.TCPClient('127.0.0.1', portnum, f)
         s.startService()
+
         self.services.append(s)
-        d.addCallbacks(lambda res: self.fail("hey! this is supposed to fail"),
+
+        d.addCallbacks(lambda res: self.fail('hey! this is supposed to fail'),
                        lambda f: self._testServerTimeout_1)
         return d
     testServerTimeout.timeout = 10
+
     def _testServerTimeout_1(self, f):
         self.assertTrue(f.check(tokens.NegotiationError))
-        self.assertEqual(f.value.args[0], "negotiation timeout")
+        self.assertEqual(f.value.args[0], 'negotiation timeout')
 
 
 class Parallel(BaseMixin, unittest.TestCase):
@@ -404,6 +418,7 @@ class CrossfireMixin(BaseMixin, PollMixin):
 class CrossfireReverse(CrossfireMixin, unittest.TestCase):
     # just like the following Crossfire except that tub2 is the master, just
     # in case it makes a difference somewhere
+
     tub1IsMaster = False
 
     def test1(self):
@@ -411,27 +426,29 @@ class CrossfireReverse(CrossfireMixin, unittest.TestCase):
         # connection[1] fail, the tub2.getReference that uses it will fail
         # too (whereas in all other tests, connection[1] is abandoned but
         # tub2.getReference succeeds)
-        self.makeServers(lo1={'debug_slow_connectionMade': True})
-        d = self.tub2.stopListeningOn(self.tub2.getListeners()[0])
-        d.addCallback(self._test1_1)
-        return d
 
-    def _test1_1(self, res):
-        d,d1 = self.connect()
-        d.addCallback(self.insert_turns, 4)
-        d.addCallbacks(lambda res: self.fail("hey! this is supposed to fail"),
-                       self._test1_2, errbackArgs=(d1,))
-        return d
-    def _test1_2(self, why, d1):
-        from twisted.internet import error
-        self.assertTrue(why.check(error.ConnectionRefusedError))
-        # but now the other getReference should succeed
-        return d1
+        self.makeServers(lo1={'debug_slow_connectionMade': True})
+
+        d = self.tub2.stopListeningOn(self.tub2.getListeners()[0])
+
+        def test1(res):
+            d, d1 = self.connect()
+            d.addCallback(self.insert_turns, 4)
+            d.addCallbacks(lambda res: self.fail('hey! this is supposed to fail'), test2, errbackArgs=(d1,))
+            return d
+
+        def test2(why, d1):
+            from twisted.internet import error
+            self.assertTrue(why.check(error.ConnectionRefusedError))
+            # but now the other getReference should succeed
+            return d1
+
+        return d.addCallback(test1)
     test1.timeout = 10
 
     def test2(self):
         self.makeServers(lo1={'debug_slow_connectionMade': True})
-        d,d1 = self.connect()
+        d, d1 = self.connect()
         d.addCallback(self.insert_turns, 4)
         d.addCallback(self.checkConnectedViaReverse, [negotiate.PLAINTEXT])
         d.addCallback(lambda res: d1) # other getReference should work too
@@ -440,12 +457,13 @@ class CrossfireReverse(CrossfireMixin, unittest.TestCase):
 
     def test3(self):
         self.makeServers(lo1={'debug_slow_sendPlaintextServer': True})
-        d,d1 = self.connect()
+        d, d1 = self.connect()
         d.addCallback(self.insert_turns, 4)
         d.addCallback(self.checkConnectedViaReverse, [negotiate.PLAINTEXT])
         d.addCallback(lambda res: d1) # other getReference should work too
         return d
     test3.timeout = 10
+
 
 class Crossfire(CrossfireReverse):
     tub1IsMaster = True
@@ -502,7 +520,6 @@ class Crossfire(CrossfireReverse):
 
 
 class Existing(CrossfireMixin, unittest.TestCase):
-
     def checkNumBrokers(self, res, expected, dummy):
         if type(expected) not in (tuple,list):
             expected = [expected]
@@ -516,31 +533,41 @@ class Existing(CrossfireMixin, unittest.TestCase):
         d = self.tub1.getReference(self.url2)
         d.addCallback(self._testAuthenticated_1)
         return d
+
     def _testAuthenticated_1(self, r12):
         # this should use the existing connection
         d = self.tub2.getReference(self.url1)
         d.addCallback(self.checkNumBrokers, 1, (r12,))
         return d
 
+
 # this test will have to change when the regular Negotiation starts using
 # different decision blocks. The version numbers must be updated each time
 # the negotiation version is changed.
-assert negotiate.Negotiation.maxVersion == 3
+assert negotiate.Negotiation.maxVersion == 191
 MAX_HANDLED_VERSION = negotiate.Negotiation.maxVersion
-UNHANDLED_VERSION = 4
+#UNHANDLED_VERSION = 3
+UNHANDLED_VERSION = MAX_HANDLED_VERSION + 1
+
+
 class NegotiationVbig(negotiate.Negotiation):
     maxVersion = UNHANDLED_VERSION
+
     def __init__(self, logparent):
         negotiate.Negotiation.__init__(self, logparent)
         self.negotiationOffer["extra"] = "new value"
-    def evaluateNegotiationVersion4(self, offer):
+
+    def evaluateNegotiationVersion192(self, offer):
         # just like v1, but different
-        return self.evaluateNegotiationVersion1(offer)
-    def acceptDecisionVersion4(self, decision):
-        return self.acceptDecisionVersion1(decision)
+        return self.evaluateNegotiationVersion191(offer)
+
+    def acceptDecisionVersion192(self, decision):
+        return self.acceptDecisionVersion191(decision)
+
 
 class NegotiationVbigOnly(NegotiationVbig):
     minVersion = UNHANDLED_VERSION
+
 
 class Future(BaseMixin, unittest.TestCase):
     def testFuture1(self):
@@ -550,17 +577,21 @@ class Future(BaseMixin, unittest.TestCase):
         # the listening Tub will have the higher tubID, and thus make the
         # negotiation decision
         url, portnum = self.makeSpecificServer(certData_high)
+
         # the client
         client = Tub(certData=certData_low)
         client.negotiationClass = NegotiationVbig
         client.startService()
+
         self.services.append(client)
+
         d = client.getReference(url)
+
         def _check_version(rref):
             ver = rref.tracker.broker._banana_decision_version
             self.assertEqual(ver, MAX_HANDLED_VERSION)
-        d.addCallback(_check_version)
-        return d
+
+        return d.addCallback(_check_version)
     testFuture1.timeout = 10
 
     def testFuture2(self):
@@ -618,18 +649,23 @@ class Future(BaseMixin, unittest.TestCase):
         # the listening Tub will have the higher tubID, and thus make the
         # negotiation decision
         url, portnum = self.makeSpecificServer(certData_high)
+
         # the client
         client = Tub(certData=certData_low)
         client.negotiationClass = NegotiationVbigOnly
         client.startService()
+
         self.services.append(client)
+
         d = client.getReference(url)
+
         def _oops_succeeded(rref):
-            self.fail("hey! this is supposed to fail")
+            self.fail('hey! this is supposed to fail')
+
         def _check_failure(f):
             f.trap(tokens.NegotiationError, tokens.RemoteNegotiationError)
-        d.addCallbacks(_oops_succeeded, _check_failure)
-        return d
+
+        return d.addCallbacks(_oops_succeeded, _check_failure)
     testTooFarInFuture1.timeout = 10
 
     def testTooFarInFuture2(self):

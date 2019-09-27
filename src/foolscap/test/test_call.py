@@ -39,6 +39,7 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addCallback(lambda res: self.assertEqual(target.calls, [(1,2)]))
         d.addCallback(self._testCall1_1, rr)
         return d
+
     def _testCall1_1(self, res, rr):
         # the caller still holds the RemoteReference
         self.assertTrue(1 in self.callingBroker.yourReferenceByCLID)
@@ -58,6 +59,7 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d = self.poll(_check)
         d.addCallback(self._testCall1_2)
         return d
+
     def _testCall1_2(self, res):
         self.assertFalse(1 in self.callingBroker.yourReferenceByCLID)
         self.assertFalse(1 in self.targetBroker.myReferenceByCLID)
@@ -88,14 +90,12 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addBoth(self._testFail1_1)
         return d
     testFail1.timeout = 2
+
     def _testFail1_1(self, f):
         # f should be a CopiedFailure
-        self.assertTrue(isinstance(f, Failure),
-                        "Hey, we didn't fail: %s" % f)
-        self.assertTrue(isinstance(f, CopiedFailure),
-                        "not CopiedFailure: %s" % f)
-        self.assertTrue(f.check(ValueError),
-                        "wrong exception type: %s" % f)
+        self.assertTrue(isinstance(f, Failure), "Hey, we didn't fail: %s" % f)
+        self.assertTrue(isinstance(f, CopiedFailure), "not CopiedFailure: %s" % f)
+        self.assertTrue(f.check(ValueError), "wrong exception type: %s" % f)
         self.assertIn("you asked me to fail", f.value)
 
     def testFail2(self):
@@ -107,13 +107,11 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addBoth(self._testFail2_1)
         return d
     testFail2.timeout = 2
+
     def _testFail2_1(self, f):
-        self.assertTrue(isinstance(f, Failure),
-                        "Hey, we didn't fail: %s" % f)
-        self.assertTrue(f.check(TypeError),
-                        "wrong exception type: %s" % f.type)
-        self.assertIn("remote_add() got an unexpected keyword "
-                      "argument 'c'", f.value)
+        self.assertTrue(isinstance(f, Failure), "Hey, we didn't fail: %s" % f)
+        self.assertTrue(f.check(TypeError), "wrong exception type: %s" % f.type)
+        self.assertIn("remote_add() got an unexpected keyword argument 'c'", f.value)
 
     def testFail3(self):
         # this is done without interfaces
@@ -124,6 +122,7 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addBoth(self._testFail3_1)
         return d
     testFail3.timeout = 2
+
     def _testFail3_1(self, f):
         self.assertTrue(isinstance(f, Failure),
                         "Hey, we didn't fail: %s" % f)
@@ -143,12 +142,11 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addBoth(self._testFailStringException_1)
         return d
     testFailStringException.timeout = 2
+
     def _testFailStringException_1(self, f):
         # f should be a CopiedFailure
-        self.assertTrue(isinstance(f, Failure),
-                        "Hey, we didn't fail: %s" % f)
-        self.assertTrue(f.check("string exceptions are annoying"),
-                        "wrong exception type: %s" % f)
+        self.assertTrue(isinstance(f, Failure), "Hey, we didn't fail: %s" % f)
+        self.assertTrue(f.check("string exceptions are annoying"), "wrong exception type: %s" % f)
 
     def testCopiedFailure(self):
         # A calls B, who calls C. C fails. B gets a CopiedFailure and reports
@@ -157,10 +155,8 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d = rr.callRemote("fail_remotely", target)
         def _check(f):
             # f should be a CopiedFailure
-            self.assertTrue(isinstance(f, Failure),
-                            "Hey, we didn't fail: %s" % f)
-            self.assertTrue(f.check(ValueError),
-                            "wrong exception type: %s" % f)
+            self.assertTrue(isinstance(f, Failure), "Hey, we didn't fail: %s" % f)
+            self.assertTrue(f.check(ValueError), "wrong exception type: %s" % f)
             self.assertIn("you asked me to fail", f.value)
         d.addBoth(_check)
         return d
@@ -186,7 +182,7 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
     def testCall4(self):
         # call through a manually-defined RemoteMethodSchema
         rr, target = self.setupTarget(Target(), True)
-        d = rr.callRemote("add", 3, 4, _methodConstraint=RIMyTarget['add1'])
+        d = rr.callRemote('add', 3, 4, _methodConstraint=RIMyTarget['add1'])
         d.addCallback(lambda res: self.assertEqual(res, 7))
         return d
     testCall4.timeout = 2
@@ -200,31 +196,33 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         # propagating the maxLength= attribute of the StringConstraint to the
         # children (using the default of 1000 bytes instead).
         rr, target = self.setupTarget(HelperTarget())
-        d = rr.callRemote("choice1", 4)
+        d = rr.callRemote('choice1', 4)
         d.addCallback(lambda res: self.assertEqual(res, None))
-        d.addCallback(lambda res: rr.callRemote("choice1", "a"*2000))
+        d.addCallback(lambda res: rr.callRemote('choice1', 'a' * 2000))
         d.addCallback(lambda res: self.assertEqual(res, None))
         # False does not conform
-        d.addCallback(lambda res:
-                      self.shouldFail(Violation, "testChoiceOf", None,
-                                      rr.callRemote, "choice1", False))
+        d.addCallback(lambda res: self.shouldFail(Violation, 'testChoiceOf', None, rr.callRemote, 'choice1', False))
         return d
 
     def testMegaSchema(self):
         # try to exercise all our constraints at once
         rr, target = self.setupTarget(HelperTarget())
+
         t = (set([1, 2, 3]),
-             "str", True, 12, 12, 19.3, None,
-             u"unicode",
-             "bytestring",
-             "any", 14.3,
+             b'bytes', True, 12, 19.3, None,
+             'string',
+             b'bytestring',
+             'any',
+             14.3,
              15,
-             "a"*95,
-             "1234567890",
-              )
-        obj1 = {"key": [t]}
-        obj2 = (set([1,2,3]), [1,2,3], {1:"two"})
-        d = rr.callRemote("megaschema", obj1, obj2)
+             'a' * 95,
+             '1234567890',
+        )
+
+        obj1 = {'key': [t]}
+        obj2 = (set([1, 2, 3]), [1, 2, 3], {1: 'two'})
+
+        d = rr.callRemote('megaschema', obj1, obj2)
         d.addCallback(lambda res: self.assertEqual(res, None))
         return d
 
@@ -361,14 +359,12 @@ class TestCall(TargetMixin, ShouldFailMixin, unittest.TestCase):
         d.addCallback(lambda res: self.assertTrue(target.calls))
         return d
     testFailWrongReturnLocal.timeout = 2
+
     def _testFailWrongReturnLocal_1(self, f):
         self.assertTrue(f.check(Violation))
-        self.assertIn("INT token rejected by ByteStringConstraint",
-                      str(f))
+        self.assertIn("INT token rejected by StringConstraint", str(f))
         self.assertIn("in inbound method results", str(f))
         self.assertIn("<RootUnslicer>.Answer(req=1)", str(f))
-
-
 
     def testDefer(self):
         rr, target = self.setupTarget(HelperTarget())
@@ -564,8 +560,7 @@ class ExamineFailuresMixin:
     def _examine_local_violation(self, r):
         f = r[0]
         self.assertTrue(f.check(Violation))
-        self.assertTrue(re.search(r'RIMyTarget\(.*\) does not offer bogus',
-                                  str(f)))
+        self.assertTrue(re.search(r'RIMyTarget\(.*\) does not offer bogus', str(f)))
         self.assertFalse(f.check(RemoteException))
 
     def _examine_remote_violation(self, r, should_be_remote):
@@ -580,8 +575,7 @@ class ExamineFailuresMixin:
             f2 = f
         self.assertTrue(isinstance(f2, CopiedFailure))
         self.assertTrue(f2.check(Violation))
-        self.assertIn("STRING token rejected by IntegerConstraint",
-                      f2.value)
+        self.assertIn("STRING token rejected by IntegerConstraint", f2.value)
         self.assertIn("<RootUnslicer>.<methodcall", f2.value)
         self.assertIn(" methodname=add", f2.value)
         self.assertIn("<arguments arg[b]>", f2.value)
@@ -605,14 +599,13 @@ class ExamineFailuresMixin:
     def _examine_local_return_violation(self, r):
         f = r[0]
         self.assertTrue(f.check(Violation))
-        self.assertIn("INT token rejected by ByteStringConstraint",
-                      str(f))
-        self.assertIn("in inbound method results", str(f))
-        self.assertIn("<RootUnslicer>.Answer(req=1)", str(f))
+        self.assertIn('INT token rejected by StringConstraint', str(f))
+        self.assertIn('in inbound method results', str(f))
+        self.assertIn('<RootUnslicer>.Answer(req=1)', str(f))
         self.assertFalse(f.check(RemoteException))
 
-class Failures(ExamineFailuresMixin, TargetMixin, ShouldFailMixin,
-               unittest.TestCase):
+
+class Failures(ExamineFailuresMixin, TargetMixin, ShouldFailMixin, unittest.TestCase):
     def setUp(self):
         TargetMixin.setUp(self)
         self.setupBrokers()
@@ -642,82 +635,77 @@ class Failures(ExamineFailuresMixin, TargetMixin, ShouldFailMixin,
         d.addCallback(self._examine_raise, False)
         return d
 
-
     def test_local_violation_not_exposed(self):
         self._set_expose(False)
         # the caller knows that this method does not really exist, so we
         # should get a local Violation. Local exceptions are never reported
         # as RemoteExceptions, so the expose option doesn't affect behavior.
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None, rr.callRemote, "bogus")
+        d = self.shouldFail(Violation, 'one', None, rr.callRemote, 'bogus')
         d.addCallback(self._examine_local_violation)
         return d
 
     def test_local_violation_yes_exposed(self):
         self._set_expose(True)
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None, rr.callRemote, "bogus")
+        d = self.shouldFail(Violation, 'one', None, rr.callRemote, 'bogus')
         d.addCallback(self._examine_local_violation)
         return d
 
     def test_local_violation_default(self):
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None, rr.callRemote, "bogus")
-        d.addCallback(self._examine_local_violation)
-        return d
-
+        d = self.shouldFail(Violation, 'one', None, rr.callRemote, 'bogus')
+        return d.addCallback(self._examine_local_violation)
 
     def test_remote_violation_not_exposed(self):
         self._set_expose(False)
         # the sender thinks they're ok, but the recipient catches the
         # violation.
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(RemoteException, "one", None,
-                            rr.callRemote, "add", a=1,b="foo", _useSchema=False)
+        d = self.shouldFail(RemoteException, 'one', None,
+                            rr.callRemote, 'add', a=1, b='foo', _useSchema=False)
         d.addCallback(self._examine_remote_violation, True)
         return d
 
     def test_remote_violation_yes_exposed(self):
         self._set_expose(True)
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None,
-                            rr.callRemote, "add", a=1,b="foo", _useSchema=False)
+        d = self.shouldFail(Violation, 'one', None,
+                            rr.callRemote, 'add', a=1, b='foo', _useSchema=False)
         d.addCallback(self._examine_remote_violation, False)
         return d
 
     def test_remote_violation_default(self):
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None,
-                            rr.callRemote, "add", a=1,b="foo", _useSchema=False)
+        d = self.shouldFail(Violation, 'one', None,
+                            rr.callRemote, 'add', a=1, b='foo', _useSchema=False)
         d.addCallback(self._examine_remote_violation, False)
         return d
-
 
     def test_remote_attribute_error_not_exposed(self):
         self._set_expose(False)
         # the target doesn't specify an interface, so the sender can't know
         # that the method is missing
         rr, target = self.setupTarget(TargetWithoutInterfaces())
-        d = self.shouldFail(RemoteException, "one", None,
-                            rr.callRemote, "bogus")
+        d = self.shouldFail(RemoteException, 'one', None,
+                            rr.callRemote, 'bogus')
         d.addCallback(self._examine_remote_attribute_error, True)
         return d
 
     def test_remote_attribute_error_yes_exposed(self):
         self._set_expose(True)
         rr, target = self.setupTarget(TargetWithoutInterfaces())
-        d = self.shouldFail(AttributeError, "one", None,
-                            rr.callRemote, "bogus")
+        d = self.shouldFail(AttributeError, 'one', None,
+                            rr.callRemote, 'bogus')
         d.addCallback(self._examine_remote_attribute_error, False)
         return d
 
     def test_remote_attribute_error_default(self):
         rr, target = self.setupTarget(TargetWithoutInterfaces())
-        d = self.shouldFail(AttributeError, "one", None,
-                            rr.callRemote, "bogus")
+        d = self.shouldFail(AttributeError, 'one', None,
+                            rr.callRemote, 'bogus')
         d.addCallback(self._examine_remote_attribute_error, False)
         return d
-
 
     def test_local_return_violation_not_exposed(self):
         self._set_expose(False)
@@ -725,18 +713,18 @@ class Failures(ExamineFailuresMixin, TargetMixin, ShouldFailMixin,
         # Local exceptions are never reported as RemoteExceptions, so the
         # expose option doesn't affect behavior.
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None,
+        d = self.shouldFail(Violation, 'one', None,
                             rr.callRemote,
-                            "add", a=1, b=2, _resultConstraint=str)
+                            'add', a=1, b=2, _resultConstraint=str)
         d.addCallback(self._examine_local_return_violation)
         return d
 
     def test_local_return_violation_yes_exposed(self):
         self._set_expose(True)
         rr, target = self.setupTarget(Target(), True)
-        d = self.shouldFail(Violation, "one", None,
+        d = self.shouldFail(Violation, 'one', None,
                             rr.callRemote,
-                            "add", a=1, b=2, _resultConstraint=str)
+                            'add', a=1, b=2, _resultConstraint=str)
         d.addCallback(self._examine_local_return_violation)
         return d
 

@@ -161,6 +161,8 @@ class Negotiation(protocol.Protocol):
         self._logparent = log.msg("Negotiation started", parent=logparent,
                                   facility="foolscap.negotiation")
 
+        assert self.minVersion <= self.maxVersion, (self.minVersion, self.maxVersion)
+
         for ver in range(self.minVersion, self.maxVersion + 1):
             assert hasattr(self, 'evaluateNegotiationVersion{:d}'.format(ver)), ver
             assert hasattr(self, 'acceptDecisionVersion{:d}'.format(ver)), ver
@@ -282,15 +284,19 @@ class Negotiation(protocol.Protocol):
         self.transport.write(b'\r\n') # end block
 
     def debug_doTimer(self, name, timeout, call, *args):
-        if ("debug_slow_%s" % name in self._test_options) and \
-            (name not in self.debugTimers):
-            self.log("debug_doTimer(%s)" % name)
-            t = reactor.callLater(timeout, self.debug_fireTimer, name)
-            self.debugTimers[name] = (t, [(call, args)])
-            cb = self._test_options["debug_slow_%s" % name]
+        if 'debug_slow_%s' % name in self._test_options and name not in self.debugTimers:
+            self.log('debug_doTimer(%s)' % name)
+
+            timer = reactor.callLater(timeout, self.debug_fireTimer, name)
+            self.debugTimers[name] = timer, [(call, args)]
+
+            cb = self._test_options['debug_slow_%s' % name]
+
             if cb is not None and cb is not True:
                 cb()
+
             return True
+
         return False
 
     def debug_doPause(self, name, call, *args):
@@ -335,7 +341,8 @@ class Negotiation(protocol.Protocol):
     def debug_fireTimer(self, name):
         calls = self.debugTimers[name][1]
         self.debugTimers[name] = None
-        for call,args in calls:
+
+        for call, args in calls:
             call(*args)
 
     def connectionMade(self):
@@ -384,7 +391,9 @@ class Negotiation(protocol.Protocol):
         # server timeout first
         if self.debug_doTimer("connectionMade", 1, self.connectionMade):
             return
+
         timeout = self._test_options.get('server_timeout', self.SERVER_TIMEOUT)
+
         if timeout:
             # oldpb clients will hit this case.
             self.negotiationTimer = reactor.callLater(timeout, self.negotiationTimedOut)
@@ -414,7 +423,7 @@ class Negotiation(protocol.Protocol):
 
         self.buffer += chunk
 
-        if self.debug_addTimerCallback("connectionMade", self.dataReceived, ''):
+        if self.debug_addTimerCallback('connectionMade', self.dataReceived, b''):
             return
 
         try:
@@ -490,20 +499,25 @@ class Negotiation(protocol.Protocol):
     def connectionLost(self, reason):
         # force connectionMade to happen, so connectionLost can occur
         # normally
-        self.debug_forceTimer("connectionMade")
+        self.debug_forceTimer('connectionMade')
+
         # cancel the other slowdown timers, since they all involve sending
         # data, and the connection is no longer available
         self.debug_cancelAllTimers()
-        for k,t in self.debugTimers.items():
-            if t:
-                t[0].cancel()
-                self.debugTimers[k] = None
+
+        for key, timer in list(self.debugTimers.items()):
+            if timer:
+                timer[0].cancel()
+                self.debugTimers[key] = None
+
         if self.isClient:
-            l = self.tub._test_options.get("debug_gatherPhases")
+            l = self.tub._test_options.get('debug_gatherPhases')
             if l is not None:
                 l.append(self.receive_phase)
+
         if not self.failureReason:
             self.failureReason = reason
+
         self.negotiationFailed()
 
     def handlePLAINTEXTServer(self, header):
@@ -1109,11 +1123,14 @@ class Negotiation(protocol.Protocol):
         # We use the MyOptions class to fix up the verify stuff: we request a
         # certificate from the client, but do not verify it against a list of
         # root CAs
-        self.log("startTLS, client=%s" % self.isClient)
+
+        self.log('startTLS, client=%s' % self.isClient)
         kwargs = {}
+
         if cert:
             kwargs['privateKey'] = cert.privateKey.original
             kwargs['certificate'] = cert.original
+
         ctxFactory = crypto.FoolscapContextFactory(**kwargs)
 
         self.transport.startTLS(ctxFactory)
@@ -1122,9 +1139,8 @@ class Negotiation(protocol.Protocol):
         # switch over to the new protocol (a Broker instance). This
         # Negotiation protocol goes away after this point.
 
-        lp = self.log("Negotiate.switchToBanana(isClient=%s)" % self.isClient,
-                      level=NOISY)
-        self.log("params: %s" % (params,), parent=lp)
+        lp = self.log('Negotiate.switchToBanana(isClient=%s)' % self.isClient, level=NOISY)
+        self.log('params: %s' % (params,), parent=lp)
 
         self.stopNegotiationTimer()
 
@@ -1136,18 +1152,18 @@ class Negotiation(protocol.Protocol):
         b = self.brokerClass(theirTubRef, params,
                              self.tub.keepaliveTimeout,
                              self.tub.disconnectTimeout,
-                             self._connectionInfo,
-                             )
+                             self._connectionInfo)
         b.factory = self.factory # not used for PB code
         b.setTub(self.tub)
+
         # we leave ourselves as the protocol, but redirect incoming messages
         # (from the transport) to the broker
         #self.transport.protocol = b
-        self.dataReceived = b.dataReceived
+        self.dataReceived   = b.dataReceived
         self.connectionLost = b.connectionLost
 
         b.makeConnection(self.transport)
-        buf, self.buffer = self.buffer, b"" # empty our buffer, just in case
+        buf, self.buffer = self.buffer, b'' # empty our buffer, just in case
         b.dataReceived(buf) # and hand it to the new protocol
 
         self._connectionInfo._set_connected(True)
@@ -1157,7 +1173,7 @@ class Negotiation(protocol.Protocol):
         if self.isClient:
             self.connector.connectorNegotiationComplete(self, self.factory.location)
         else:
-            self._connectionInfo._set_listener_status("successful")
+            self._connectionInfo._set_listener_status('successful')
 
         # finally let our Tub know that they can start using the new Broker.
         # This will wake up anyone who initiated an outbound connection.
@@ -1166,14 +1182,18 @@ class Negotiation(protocol.Protocol):
     def negotiationFailed(self):
         reason = self.failureReason
         self.stopNegotiationTimer()
+
         if self.receive_phase != ABANDONED and self.isClient:
             eventually(self.connector.connectorNegotiationFailed, self,
                        self.factory.location, reason)
+
         self.receive_phase = ABANDONED
+
         if not self.isClient:
-            description = "negotiation failed: %s" % str(reason.value)
+            description = 'negotiation failed: %s' % str(reason.value)
             self._connectionInfo._set_listener_status(description)
-        cb = self._test_options.get("debug_negotiationFailed_cb")
+
+        cb = self._test_options.get('debug_negotiationFailed_cb')
         if cb:
             # note that this gets called with a NegotiationError, not a
             # Failure. ACTUALLY: not true, gets a Failure
@@ -1186,22 +1206,20 @@ class Negotiation(protocol.Protocol):
         # Tahoe) that construct cross-linked connections.
         if reason.check(DuplicateConnection):
             # this happens when we reject a connection during negotiation
-            self.log("negotiationFailed: DuplicateConnection",
-                     level=NOISY, umid="XRFlRA")
+            self.log('negotiationFailed: DuplicateConnection', level=NOISY, umid='XRFlRA')
+
         elif reason.check(ConnectionDone):
             # this happens to our other losing parallel connection attempts
-            self.log("negotiationFailed: ConnectionDone",
-                     level=NOISY, umid="9khFxA")
+            self.log('negotiationFailed: ConnectionDone', level=NOISY, umid='9khFxA')
+
         elif reason.check(RemoteNegotiationError):
             # and this is how the remote side tells us they rejected or
             # abandoned a connection. Sometimes it's due to a duplicate
             # connection, sometimes due to code problems. In either case, the
             # traceback would only show local code, and is unhelpful.
-            self.log("negotiationFailed: remote: %s" % reason.value.args[0],
-                     level=NOISY, umid="yAsbmA")
+            self.log('negotiationFailed: remote: %s' % reason.value.args[0], level=NOISY, umid='yAsbmA')
         else:
             # This shouldn't happen very often.
-            self.log("negotiationFailed", failure=reason,
-                     level=OPERATIONAL, umid="pm2kjg")
+            self.log('negotiationFailed', failure=reason, level=OPERATIONAL, umid='pm2kjg')
 
 # TODO: make sure code that examines self.receive_phase handles ABANDONED
