@@ -15,14 +15,16 @@ def is_non_public_numeric_address(host):
     # for numeric hostnames, skip RFC1918 addresses, since no Tor exit
     # node will be able to reach those. Likewise ignore IPv6 addresses.
     try:
-        a = ipaddress.ip_address(host.decode("ascii")) # wants unicode
+        a = ipaddress.ip_address(host)
     except ValueError:
         return False # non-numeric, let Tor try it
+
     if a.version != 4:
         return True # IPv6 gets ignored
-    if (a.is_loopback or a.is_multicast or a.is_private or a.is_reserved
-        or a.is_unspecified):
+
+    if a.is_loopback or a.is_multicast or a.is_private or a.is_reserved or a.is_unspecified:
         return True # too weird, don't connect
+
     return False
 
 HINT_RE = re.compile(r"^[^:]*:(%s|%s):(\d+){1,5}$" % (DOTTED_QUAD_RESTR,
@@ -61,20 +63,24 @@ class _Common:
         # Return (endpoint, hostname), where "hostname" is what we pass to the
         # HTTP "Host:" header so a dumb HTTP server can be used to redirect us.
         mo = HINT_RE.search(hint)
+
         if not mo:
             raise InvalidHintError("unrecognized TCP/Tor hint")
+
         host, portnum = mo.group(1), int(mo.group(2))
+
         if is_non_public_numeric_address(host):
             raise InvalidHintError("ignoring non-Tor-able ipaddr %s" % host)
+
         with add_context(update_status, "connecting to a Tor"):
             socks_endpoint = yield self._maybe_connect(reactor, update_status)
+
         # txsocksx doesn't like unicode: it concatenates some binary protocol
         # bytes with the hostname when talking to the SOCKS server, so the
         # py2 automatic unicode promotion blows up
         host = host.encode("ascii")
-        ep = txtorcon.TorClientEndpoint(host, portnum,
-                                        socks_endpoint=socks_endpoint)
-        returnValue( (ep, host) )
+        ep = txtorcon.TorClientEndpoint(host, portnum, socks_endpoint=socks_endpoint)
+        returnValue((ep, host))
 
     def describe(self):
         return "tor"
