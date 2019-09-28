@@ -224,25 +224,25 @@ class CommandPP(protocol.ProcessProtocol):
 
     def outReceived(self, data):
         if self.outpipe:
-            self.outpipe.callRemoteOnly("stdout", data)
+            self.outpipe.callRemoteOnly('stdout', data)
 
         if self.log_stdout:
-            sent = {True:"sent", False:"not sent"}[bool(self.outpipe)]
-            log.msg("stdout (%s): %r" % (sent, data))
+            sent = {True: 'sent', False: 'not sent'}[bool(self.outpipe)]
+            log.msg('stdout (%s): %r' % (sent, data))
 
     def errReceived(self, data):
         if self.errpipe:
-            self.errpipe.callRemoteOnly("stderr", data)
+            self.errpipe.callRemoteOnly('stderr', data)
 
         if self.log_stderr:
-            sent = {True:"sent", False:"not sent"}[bool(self.errpipe)]
-            log.msg("stderr (%s): %r" % (sent, data))
+            sent = {True: 'sent', False: 'not sent'}[bool(self.errpipe)]
+            log.msg('stderr (%s): %r' % (sent, data))
 
     def processEnded(self, reason):
         e = reason.value
         code = e.exitCode
-        log.msg("process ended (signal=%s, rc=%s)" % (e.signal, code))
-        self.watcher.callRemoteOnly("done", e.signal, code)
+        log.msg('process ended (signal=%s, rc=%s)' % (e.signal, code))
+        self.watcher.callRemoteOnly('done', e.signal, code)
 
 
 class Command(Referenceable):
@@ -252,18 +252,17 @@ class Command(Referenceable):
         self.closed = False
 
     def remote_feed_stdin(self, data):
-        if not isinstance(data, str):
-            raise TypeError("stdin can accept only strings of bytes, not '%s'"
-                            % (type(data),))
+        if type(data) is not bytes:
+            raise TypeError('stdin can accept only <bytes>, not {!r}'.format(type(data)))
         if self.log_stdin:
-            log.msg("stdin: %r" % data)
+            log.msg('stdin: %r' % data)
         self.process.write(data)
 
     def remote_close_stdin(self):
         if not self.closed:
             self.closed = True
             if self.log_stdin:
-                log.msg("stdin closed")
+                log.msg('stdin closed')
             self.process.closeStdin()
 
 
@@ -288,16 +287,17 @@ class CommandRunner(service.MultiService, Referenceable):
         executable = o.command_argv[0]
 
         log.msg("command started in dir %s: %s" % (o.targetdir, o.command_argv))
+
         p = reactor.spawnProcess(pp,
                                  executable,
                                  o.command_argv,
                                  os.environ,
                                  o.targetdir)
+
         if o.accept_stdin:
             c = Command(p, o.log_stdin)
             watcher.notifyOnDisconnect(c.remote_close_stdin)
             return c
-        return None
 
 
 all_services = {

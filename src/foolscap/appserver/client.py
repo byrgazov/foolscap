@@ -1,27 +1,33 @@
 
-from __future__ import print_function
 import os, sys
-from six import StringIO
-from twisted.python import usage
+import io
+
 from twisted.internet import defer
+from twisted.python   import failure
+from twisted.python   import usage
+
 
 # does "flappserver start" need us to refrain from importing the reactor here?
 import foolscap
 from foolscap.api import Tub, Referenceable, fireEventually
 
+
 class BaseOptions(usage.Options):
     def opt_h(self):
         return self.opt_help()
 
+
 class UploadFileOptions(BaseOptions):
     def getSynopsis(self):
         return "Usage: flappclient [--furl=|--furlfile] upload-file SOURCEFILES.."
+
     def parseArgs(self, *sourcefiles):
         self.sourcefiles = sourcefiles
     longdesc = """This client sends one or more files to the upload-file
     service waiting at the given FURL. All files will be placed in the
     pre-configured target directory, using the basename of each SOURCEFILE
     argument."""
+
 
 class Uploader(Referenceable):
     def run(self, rref, sourcefile, name):
@@ -30,6 +36,7 @@ class Uploader(Referenceable):
 
     def remote_read(self, size):
         return self.f.read(size)
+
 
 class UploadFile(Referenceable):
     def run(self, rref, options):
@@ -40,8 +47,10 @@ class UploadFile(Referenceable):
             d.addCallback(self._done, options, name)
         d.addCallback(lambda _ign: 0)
         return d
+
     def _upload(self, _ignored, rref, sf, name):
         return Uploader().run(rref, sf, name)
+
     def _done(self, _ignored, options, name):
         print("%s: uploaded" % name, file=options.stdout)
 
@@ -63,6 +72,8 @@ class RunCommandOptions(BaseOptions):
 
 
 from twisted.internet.stdio import StandardIO as TwitchyStandardIO
+
+
 class StandardIO(TwitchyStandardIO):
     def childConnectionLost(self, fd, reason):
         # the usual StandardIO class doesn't seem to handle half-closed stdio
@@ -77,16 +88,20 @@ class StandardIO(TwitchyStandardIO):
         #
         # so this hack is to make it look more like a half-close
         #print >>sys.stderr, "my StandardIO.childConnectionLost", fd, reason.value
+
         from twisted.internet import error, main
-        from twisted.python import failure
-        if reason.check(error.ConnectionLost) and fd == "write":
+
+        if reason.check(error.ConnectionLost) and fd == 'write':
             #print >>sys.stderr, " fixing"
             reason = failure.Failure(main.CONNECTION_DONE)
+
         return TwitchyStandardIO.childConnectionLost(self, fd, reason)
+
 
 from twisted.internet.protocol import Protocol
 #from zope.interface import implements
 #from twisted.internet.interfaces import IHalfCloseableProtocol
+
 
 class RunCommand(Referenceable, Protocol):
     #implements(IHalfCloseableProtocol)
@@ -95,25 +110,24 @@ class RunCommand(Referenceable, Protocol):
         self.d = defer.Deferred()
         rref.notifyOnDisconnect(self._done, 3)
         self.stdin_writer = None
-        self.stdio = options.stdio
+        self.stdio  = options.stdio
         self.stdout = options.stdout
         self.stderr = options.stderr
-        d = rref.callRemote("execute", self)
+        d = rref.callRemote('execute', self)
         d.addCallback(self._started)
         d.addErrback(self._err)
         return self.d
 
     def dataReceived(self, data):
-        if not isinstance(data, str):
-            raise TypeError("stdin can accept only strings of bytes, not '%s'"
-                            % (type(data),))
+        if type(data) is not bytes:
+            raise TypeError('stdin can accept only <bytes>, not {!r}'.format(type(data)))
         # this is from stdin. It shouldn't be called until after _started
         # sets up stdio and self.stdin_writer
-        self.stdin_writer.callRemoteOnly("feed_stdin", data)
+        self.stdin_writer.callRemoteOnly('feed_stdin', data)
 
     def connectionLost(self, reason):
         # likewise, this won't be called unless _started wanted stdin
-        self.stdin_writer.callRemoteOnly("close_stdin")
+        self.stdin_writer.callRemoteOnly('close_stdin')
 
     def _started(self, stdin_writer):
         if stdin_writer:
@@ -122,22 +136,30 @@ class RunCommand(Referenceable, Protocol):
         # otherwise they don't want our stdin, so leave stdin_writer=None
 
     def remote_stdout(self, data):
-        self.stdout.write(data)
-        self.stdout.flush()
+        try:
+            self.stdout.write(data.decode())
+            self.stdout.flush()
+        except Exception:
+            self._done(failure.Failure())
+
     def remote_stderr(self, data):
-        self.stderr.write(data)
-        self.stderr.flush()
+        try:
+            self.stderr.write(data.decode())
+            self.stderr.flush()
+        except Exception:
+            self._done(failure.Failure())
+
     def remote_done(self, signal, exitcode):
-        if signal:
-            self._done(127)
-        else:
-            self._done(exitcode)
+        self._done(127 if signal else exitcode)
+
     def _err(self, f):
         self._done(f)
+
     def _done(self, res):
         if not self.done:
             self.done = True
             self.d.callback(res)
+
 
 class ClientOptions(usage.Options):
     synopsis = "Usage: flappclient [--furl=|--furlfile=] COMMAND"
@@ -190,10 +212,11 @@ class ClientOptions(usage.Options):
         print("Twisted version:", copyright.version, file=self.stdout)
         sys.exit(0)
 
+
 dispatch_table = {
-    "upload-file": UploadFile,
-    "run-command": RunCommand,
-    }
+    'upload-file': UploadFile,
+    'run-command': RunCommand,
+}
 
 
 def parse_options(command_name, argv, stdio, stdout, stderr):
@@ -203,43 +226,52 @@ def parse_options(command_name, argv, stdio, stdout, stderr):
         config.stderr = stderr
         config.parseOptions(argv)
 
-        config.subOptions.stdio = stdio # for streaming input
+        config.subOptions.stdio  = stdio  # for streaming input
         config.subOptions.stdout = stdout
         config.subOptions.stderr = stderr
 
     except usage.error as e:
-        print("%s:  %s\n" % (command_name, e), file=stderr)
+        print('%s:  %s\n' % (command_name, e), file=stderr)
         c = getattr(config, 'subOptions', config)
         print(str(c), file=stderr)
         sys.exit(1)
 
     return config
 
+
 def run_command(config):
     c = dispatch_table[config.subCommand]()
     tub = Tub()
+
     try:
         from twisted.internet import reactor
         from twisted.internet.endpoints import clientFromString
         from foolscap.connections import tor
-        CONTROL = os.environ.get("FOOLSCAP_TOR_CONTROL_PORT", "")
-        SOCKS = os.environ.get("FOOLSCAP_TOR_SOCKS_PORT", "")
+
+        CONTROL = os.environ.get('FOOLSCAP_TOR_CONTROL_PORT', '')
+        SOCKS   = os.environ.get('FOOLSCAP_TOR_SOCKS_PORT',   '')
+
         if CONTROL:
             h = tor.control_endpoint(clientFromString(reactor, CONTROL))
-            tub.addConnectionHintHandler("tor", h)
+            tub.addConnectionHintHandler('tor', h)
+
         elif SOCKS:
             h = tor.socks_endpoint(clientFromString(reactor, SOCKS))
-            tub.addConnectionHintHandler("tor", h)
+            tub.addConnectionHintHandler('tor', h)
+
         #else:
         #    h = tor.default_socks()
         #    tub.addConnectionHintHandler("tor", h)
     except ImportError:
         pass
+
     d = defer.succeed(None)
+
     d.addCallback(lambda _ign: tub.startService())
     d.addCallback(lambda _ign: tub.getReference(config.furl))
     d.addCallback(c.run, config.subOptions) # might provide tub here
     d.addBoth(lambda res: tub.stopService().addCallback(lambda _ign: res))
+
     return d
 
 
@@ -248,25 +280,27 @@ def run_flappclient(argv=None, run_by_human=True, stdio=StandardIO):
         stdout = sys.stdout
         stderr = sys.stderr
     else:
-        stdout = StringIO()
-        stderr = StringIO()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
     if argv:
         command_name,argv = argv[0],argv[1:]
     else:
         command_name = sys.argv[0]
 
     d = fireEventually()
-    d.addCallback(lambda _ign: parse_options(command_name, argv,
-                                             stdio, stdout, stderr))
+    d.addCallback(lambda _ign: parse_options(command_name, argv, stdio, stdout, stderr))
     d.addCallback(run_command)
 
     if run_by_human:
         # we need to spin up our own reactor
         from twisted.internet import reactor
         stash_rc = []
+
         def good(rc):
             stash_rc.append(rc)
             reactor.stop()
+
         def oops(f):
             if f.check(SystemExit):
                 stash_rc.append(f.value.args[0])
@@ -275,15 +309,21 @@ def run_flappclient(argv=None, run_by_human=True, stdio=StandardIO):
                 print(f, file=stderr)
                 stash_rc.append(-1)
             reactor.stop()
+
         d.addCallbacks(good, oops)
+
         reactor.run()
+
         sys.exit(stash_rc[0] if stash_rc else 1)
+
     else:
+        @d.addErrback
         def _convert_system_exit(f):
             f.trap(SystemExit)
             return f.value.args[0]
-        d.addErrback(_convert_system_exit)
+
+        @d.addCallback
         def done(rc):
             return (rc, stdout.getvalue(), stderr.getvalue())
-        d.addCallback(done)
+
         return d
