@@ -54,8 +54,9 @@ class ConformTest(unittest.TestCase):
 
     def testByteString(self):
         c = schema.ByteStringConstraint(10)
+        self.violates(c,  "I'm str")
         self.conforms(c, b"I'm short")
-        self.violates(c, "I am too long")
+        self.violates(c, b"I am toooooo long")
         self.conforms(c, b"a" * 10)
         self.violates(c, b"a" * 11)
         self.violates(c, 123)
@@ -80,44 +81,37 @@ class ConformTest(unittest.TestCase):
         self.violates(c5, b"letters first 123")
 
     def testString(self):
-        # this test will change once the definition of "StringConstraint"
-        # changes. For now, we assert that StringConstraint is the same as
-        # ByteStringConstraint.
-
         c = schema.StringConstraint(20)
-        self.conforms(c, b"I'm short")
-        self.violates(c, u"I am unicode")
 
-    def testUnicode(self):
-        c = schema.UnicodeConstraint(10)
-        self.violates(c, b"I'm a bytestring")
-        self.conforms(c, u"I'm short")
-        self.violates(c, u"I am too long")
-        self.conforms(c, u"a" * 10)
-        self.violates(c, u"a" * 11)
+        self.conforms(c,  'I\'m short')
+        self.violates(c, b'I\'m a bytestring')
+        self.conforms(c,  'a' * 20)
+        self.violates(c,  'a' * 21)
         self.violates(c, 123)
         self.violates(c, Dummy())
         self.violates(c, None)
 
-        c2 = schema.UnicodeConstraint(15, 10)
-        self.violates(c2, b"I'm a bytestring")
-        self.violates(c2, u"too short")
-        self.conforms(c2, u"long enough")
-        self.violates(c2, u"this is too long")
+        c2 = schema.StringConstraint(15, 10)
+        self.violates(c2, b'I\'m a bytestring')
+        self.violates(c2,  'too short')
+        self.conforms(c2,  'long enough')
+        self.violates(c2,  'this is too long')
 
-        c3 = schema.UnicodeConstraint(regexp="needle")
-        self.violates(c3, b"I'm a bytestring")
-        self.violates(c3, u"no present")
-        self.conforms(c3, u"needle in a haystack")
-        c4 = schema.UnicodeConstraint(regexp="[abc]+")
-        self.violates(c4, b"I'm a bytestring")
-        self.violates(c4, u"spelled entirely without those letters")
-        self.conforms(c4, u"add better cases")
-        c5 = schema.UnicodeConstraint(regexp=re.compile(r'\d+\s\w+'))
-        self.violates(c5, b"I'm a bytestring")
-        self.conforms(c5, u": 123 boo")
-        self.violates(c5, u"more than 1  spaces")
-        self.violates(c5, u"letters first 123")
+        c3 = schema.StringConstraint(regexp='needle')
+        self.violates(c3, b'I\'m a bytestring')
+        self.violates(c3,  'no present')
+        self.conforms(c3,  'needle in a haystack')
+
+        c4 = schema.StringConstraint(regexp='[abc]+')
+        self.violates(c4, b'I\'m a bytestring')
+        self.violates(c4,  'spelled entirely without those letters')
+        self.conforms(c4,  'add better cases')
+
+        c5 = schema.StringConstraint(regexp=re.compile(r'\d+\s\w+'))
+        self.violates(c5, b'I\'m a bytestring')
+        self.conforms(c5,  ': 123 boo')
+        self.violates(c5,  'more than 1  spaces')
+        self.violates(c5,  'letters first 123')
 
     def testBool(self):
         c = schema.BooleanConstraint()
@@ -142,7 +136,7 @@ class ConformTest(unittest.TestCase):
         c = schema.TupleConstraint(schema.ByteStringConstraint(10),
                                    schema.ByteStringConstraint(100),
                                    schema.IntegerConstraint() )
-        self.conforms(c, (b"hi", b"there buddy, you're number", 1))     
+        self.conforms(c, (b"hi", b"there buddy, you're number", 1))
         self.violates(c, "nope")
         self.violates(c, ("string", "string", "NaN"))
         self.violates(c, ("string that is too long", "string", 1))
@@ -299,8 +293,8 @@ class CreateTest(unittest.TestCase):
         self.check(c, schema.ByteStringConstraint)
         self.assertEqual(c.maxLength, 2000)
 
-        c = make(unicode)
-        self.check(c, schema.UnicodeConstraint)
+        c = make(str)
+        self.check(c, schema.StringConstraint)
         self.assertEqual(c.maxLength, None)
 
         self.check(make(bool), schema.BooleanConstraint)
