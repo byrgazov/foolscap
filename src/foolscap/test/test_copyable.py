@@ -8,14 +8,17 @@ from foolscap.api import Copyable, RemoteCopy
 from foolscap.tokens import Violation
 from foolscap.schema import StringConstraint
 
+
 # MyCopyable1 is the basic Copyable/RemoteCopy pair, using auto-registration.
 
 class MyCopyable1(Copyable):
-    typeToCopy = "foolscap.test_copyable.MyCopyable1"
-    pass
+    typeToCopy = 'x' * 20 + '.foolscap.test_copyable.MyCopyable1'
+
+
 class MyRemoteCopy1(RemoteCopy):
     copytype = MyCopyable1.typeToCopy
-    pass
+
+
 #registerRemoteCopy(MyCopyable1.typeToCopy, MyRemoteCopy1)
 
 # MyCopyable2 overrides the various Copyable/RemoteCopy methods. It
@@ -23,63 +26,78 @@ class MyRemoteCopy1(RemoteCopy):
 
 class MyCopyable2(Copyable):
     def getTypeToCopy(self):
-        return "MyCopyable2name"
+        return 'MyCopyable2name'
+
     def getStateToCopy(self):
-        return {"a": 1, "b": self.b}
+        return {'a': 1, 'b': self.b}
+
+
 class MyRemoteCopy2(RemoteCopy):
-    copytype = "MyCopyable2name"
+    copytype = 'MyCopyable2name'
+
     def setCopyableState(self, state):
         self.c = 1
-        self.d = state["b"]
+        self.d = state['b']
 
 # MyCopyable3 uses a custom Slicer and a custom Unslicer
 
+
 class MyCopyable3:
     def getAlternateCopyableState(self):
-        return {"e": 2}
+        return {'e': 2}
+
 
 class MyCopyable3Slicer(copyable.CopyableSlicer):
     def slice(self, streamable, banana):
-        yield 'copyable'
-        yield "MyCopyable3name"
+        yield b'copyable'
+        yield 'MyCopyable3name'
+
         state = self.obj.getAlternateCopyableState()
+
         for k,v in state.items():
             yield k
             yield v
 
+
 class MyRemoteCopy3:
     pass
+
+
 class MyRemoteCopy3Unslicer(copyable.RemoteCopyUnslicer):
     def __init__(self):
         self.schema = None
+
     def factory(self, state):
         obj = MyRemoteCopy3()
         obj.__dict__ = state
         return obj
+
     def receiveClose(self):
         obj,d = copyable.RemoteCopyUnslicer.receiveClose(self)
-        obj.f = "yes"
+        obj.f = 'yes'
         return obj, d
+
 
 # register MyCopyable3Slicer as an ISlicer adapter for MyCopyable3, so we
 # can verify that it overrides the inherited CopyableSlicer behavior. We
 # also register an Unslicer to create the results.
+
 components.registerAdapter(MyCopyable3Slicer, MyCopyable3, tokens.ISlicer)
-copyable.registerRemoteCopyUnslicerFactory("MyCopyable3name",
-                                           MyRemoteCopy3Unslicer)
+copyable.registerRemoteCopyUnslicerFactory('MyCopyable3name', MyRemoteCopy3Unslicer)
 
 
 # MyCopyable4 uses auto-registration, and adds a stateSchema
 
 class MyCopyable4(Copyable):
-    typeToCopy = "foolscap.test_copyable.MyCopyable4"
-    pass
+    typeToCopy = 'y' * 20 + '.foolscap.test_copyable.MyCopyable4'
+
+
 class MyRemoteCopy4(RemoteCopy):
     copytype = MyCopyable4.typeToCopy
     stateSchema = copyable.AttributeDictConstraint(
         ('foo', int),
         ('bar', StringConstraint(1000)))
-    pass
+
 
 # MyCopyable5 disables auto-registration
 
@@ -88,7 +106,6 @@ class MyRemoteCopy5(RemoteCopy):
 
 
 class Copyable(TargetMixin, unittest.TestCase):
-
     def setUp(self):
         TargetMixin.setUp(self)
         self.setupBrokers()
@@ -121,25 +138,24 @@ class Copyable(TargetMixin, unittest.TestCase):
         d.addCallback(self._testFailure1_1)
         return d
     def _testFailure1_1(self, args):
-        f = args[0] 
+        f = args[0]
         #print "CopiedFailure is:", f
         #print f.__dict__
-        self.assertEqual(reflect.qual(f.type), "exceptions.RuntimeError")
+        self.assertEqual(reflect.qual(f.type), "builtins.RuntimeError")
         self.assertTrue(f.check, RuntimeError)
         self.assertEqual(f.value, "message here")
         self.assertEqual(f.frames, [])
         self.assertEqual(f.tb, None)
         self.assertEqual(f.stack, [])
         # there should be a traceback
-        self.assertTrue(f.traceback.find("raise RuntimeError") != -1,
-                        "no 'raise RuntimeError' in '%s'" % (f.traceback,))
+        self.assertTrue(f.traceback.find("raise RuntimeError") != -1, "no 'raise RuntimeError' in '%s'" % (f.traceback,))
         # older Twisted (before 17.9.0) used a Failure class that could be
         # pickled, so our derived CopiedFailure class could be round-tripped
         # through pickle correclty. Twisted-17.9.0 changed that, so we no
         # longer try that.
         ## p = pickle.dumps(f)
         ## f2 = pickle.loads(p)
-        ## self.failUnlessEqual(reflect.qual(f2.type), "exceptions.RuntimeError")
+        ## self.failUnlessEqual(reflect.qual(f2.type), "builtins.RuntimeError")
         ## self.failUnless(f2.check, RuntimeError)
         ## self.failUnlessEqual(f2.value, "message here")
         ## self.failUnlessEqual(f2.frames, [])
@@ -161,7 +177,7 @@ class Copyable(TargetMixin, unittest.TestCase):
         f = args[0]
         #print "CopiedFailure is:", f
         #print f.__dict__
-        self.assertEqual(reflect.qual(f.type), "exceptions.RuntimeError")
+        self.assertEqual(reflect.qual(f.type), "builtins.RuntimeError")
         self.assertTrue(f.check, RuntimeError)
         self.assertEqual(f.value, "message here")
         self.assertEqual(f.frames, [])
@@ -174,7 +190,7 @@ class Copyable(TargetMixin, unittest.TestCase):
         ## # them, they should look like the original
         ## p = pickle.dumps(f)
         ## f2 = pickle.loads(p)
-        ## self.failUnlessEqual(reflect.qual(f2.type), "exceptions.RuntimeError")
+        ## self.failUnlessEqual(reflect.qual(f2.type), "builtins.RuntimeError")
         ## self.failUnless(f2.check, RuntimeError)
         ## self.failUnlessEqual(f2.value, "message here")
         ## self.failUnlessEqual(f2.frames, [])
@@ -185,15 +201,16 @@ class Copyable(TargetMixin, unittest.TestCase):
     def testCopy1(self):
         obj = MyCopyable1() # just copies the dict
         obj.a = 12
-        obj.b = "foo"
-        d = self.send(obj)
-        d.addCallback(self._testCopy1_1)
-        return d
-    def _testCopy1_1(self, args):
-        res = args[0]
-        self.assertTrue(isinstance(res, MyRemoteCopy1))
-        self.assertEqual(res.a, 12)
-        self.assertEqual(res.b, "foo")
+        obj.b = 'foo'
+
+        def test(args):
+            res = args[0]
+            self.assertTrue(isinstance(res, MyRemoteCopy1))
+            self.assertEqual(res.a, 12)
+            self.assertEqual(res.b, 'foo')
+
+        return self.send(obj)\
+            .addCallback(test)
 
     def testCopy2(self):
         obj = MyCopyable2() # has a custom getStateToCopy
@@ -211,17 +228,18 @@ class Copyable(TargetMixin, unittest.TestCase):
 
     def testCopy3(self):
         obj = MyCopyable3() # has a custom Slicer
-        obj.a = 12 # ignored
-        obj.b = "foo" # ignored
-        d = self.send(obj)
-        d.addCallback(self._testCopy3_1)
-        return d
-    def _testCopy3_1(self, args):
-        res = args[0]
-        self.assertTrue(isinstance(res, MyRemoteCopy3))
-        self.assertEqual(res.e, 2)
-        self.assertEqual(res.f, "yes")
-        self.assertFalse(hasattr(res, "a"))
+        obj.a = 12    # ignored
+        obj.b = 'foo' # ignored
+
+        def test(args):
+            res = args[0]
+            self.assertTrue(isinstance(res, MyRemoteCopy3))
+            self.assertEqual(res.e, 2)
+            self.assertEqual(res.f, 'yes')
+            self.assertFalse(hasattr(res, 'a'))
+
+        return self.send(obj)\
+            .addCallback(test)
 
     def testCopy4(self):
         obj = MyCopyable4()

@@ -21,13 +21,13 @@ Interface = interface.Interface
 
 
 class ICopyable(Interface):
-    """I represent an object which is passed-by-value across PB connections.
-    """
+    """I represent an object which is passed-by-value across PB connections."""
 
     def getTypeToCopy():
         """Return a string which names the class. This string must match the
         one that gets registered at the receiving end. This is typically a
         URL of some sort, in a namespace which you control."""
+
     def getStateToCopy():
         """Return a state dictionary (with plain-string keys) which will be
         serialized and sent to the remote end. This state object will be
@@ -42,7 +42,7 @@ class Copyable:
         try:
             copytype = self.typeToCopy
         except AttributeError:
-            raise RuntimeError("Copyable subclasses must specify 'typeToCopy'")
+            raise RuntimeError('Copyable subclasses must specify "typeToCopy"')
         return copytype
 
     def getStateToCopy(self):
@@ -53,17 +53,22 @@ class CopyableSlicer(slicer.BaseSlicer):
     """I handle ICopyable objects (things which are copied by value)."""
     def slice(self, streamable, banana):
         self.streamable = streamable
+
         yield b'copyable'
+
         copytype = self.obj.getTypeToCopy()
         assert isinstance(copytype, str)
+
         yield copytype
+
         state = self.obj.getStateToCopy()
+
         for k, v in state.items():
             yield k
             yield v
 
     def describe(self):
-        return "<%s>" % self.obj.getTypeToCopy()
+        return '<%s>' % self.obj.getTypeToCopy()
 
 registerAdapter(CopyableSlicer, ICopyable, tokens.ISlicer)
 
@@ -263,6 +268,7 @@ def registerRemoteCopyUnslicerFactory(typename, unslicerfactory, registry=None):
     provides IUnslicer.
     """
     assert callable(unslicerfactory)
+
     # in addition, it must produce a tokens.IUnslicer . This is safe to do
     # because Unslicers don't do anything significant when they are created.
     test_unslicer = unslicerfactory()
@@ -271,14 +277,14 @@ def registerRemoteCopyUnslicerFactory(typename, unslicerfactory, registry=None):
 
     if registry is None:
         registry = CopyableRegistry
+
     assert typename not in registry
     registry[typename] = unslicerfactory
 
 
 # this keeps track of everything submitted to registerRemoteCopyFactory
 debug_CopyableFactories = {}
-def registerRemoteCopyFactory(typename, factory, stateSchema=None,
-                              cyclic=True, registry=None):
+def registerRemoteCopyFactory(typename, factory, stateSchema=None, cyclic=True, registry=None):
     """Tell PB that 'factory' can be used to handle Copyable objects that
     provide a getTypeToCopy name of 'typename'. 'factory' must be a callable
     which accepts a state dictionary and returns a fully-formed instance.
@@ -288,20 +294,21 @@ def registerRemoteCopyFactory(typename, factory, stateSchema=None,
     deserialize Failures (or instances which inherit from one, like
     CopiedFailure). In exchange for this, it cannot handle reference cycles.
     """
+
     assert callable(factory)
+
     debug_CopyableFactories[typename] = (factory, stateSchema, cyclic)
+
     if cyclic:
         def _RemoteCopyUnslicerFactory():
             return RemoteCopyUnslicer(factory, stateSchema)
-        registerRemoteCopyUnslicerFactory(typename,
-                                          _RemoteCopyUnslicerFactory,
-                                          registry)
+
+        registerRemoteCopyUnslicerFactory(typename, _RemoteCopyUnslicerFactory, registry)
     else:
         def _RemoteCopyUnslicerFactoryNonCyclic():
             return NonCyclicRemoteCopyUnslicer(factory, stateSchema)
-        registerRemoteCopyUnslicerFactory(typename,
-                                          _RemoteCopyUnslicerFactoryNonCyclic,
-                                          registry)
+
+        registerRemoteCopyUnslicerFactory(typename, _RemoteCopyUnslicerFactoryNonCyclic, registry)
 
 
 # this keeps track of everything submitted to registerRemoteCopy, which may
@@ -363,19 +370,17 @@ class _RemoteCopyBase:
 
 
 class RemoteCopyOldStyle(_RemoteCopyBase):
-    # note that these will not auto-register for you, because old-style
-    # classes do not do metaclass magic
+    """Note that these will not auto-register for you, because old-style
+    classes do not do metaclass magic"""
+
     copytype = None
 
 
-class RemoteCopy(_RemoteCopyBase, object):
-    # Set 'copytype' to a unique string that is shared between the
-    # sender-side Copyable and the receiver-side RemoteCopy. This RemoteCopy
-    # subclass will be auto-registered using the 'copytype' name. Set
-    # copytype to None to disable auto-registration.
-
-    __metaclass__ = RemoteCopyClass
-    pass
+class RemoteCopy(_RemoteCopyBase, metaclass=RemoteCopyClass):
+    """Set 'copytype' to a unique string that is shared between the
+    sender-side Copyable and the receiver-side RemoteCopy. This RemoteCopy
+    subclass will be auto-registered using the 'copytype' name. Set
+    copytype to None to disable auto-registration."""
 
 
 class AttributeDictConstraint(OpenerConstraint):
