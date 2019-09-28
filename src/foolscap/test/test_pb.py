@@ -438,78 +438,91 @@ class TestCallable(MakeTubsMixin, unittest.TestCase):
 
     def testLogLocalFailure(self):
         self.tubB.setOption("logLocalFailures", True)
+
         target = Target()
-        logs = []
+        logs   = []
+
         self.addLogObserver(logs.append)
+
         url = self.tubB.registerReference(target)
-        d = self.tubA.getReference(url)
+        d   = self.tubA.getReference(url)
         d.addCallback(lambda rref: rref.callRemote("fail"))
+
         # this will cause some text to be logged with log.msg. TODO: capture
         # this text and look at it more closely.
         def _check(res):
             self.assertTrue(isinstance(res, failure.Failure))
             res.trap(ValueError)
+
             messages = [log.format_message(e) for e in logs]
             failures = [e['failure'] for e in logs if "failure" in e]
-            text = "\n".join(messages)
+            text     = "\n".join(messages)
+
             msg = ("an inbound callRemote that we [%s] executed (on behalf of "
                    "someone else, TubID %s) failed\n"
                    % (self.tubB.getShortTubID(), self.tubA.getShortTubID()))
-            self.assertTrue(msg in text,
-                            "msg '%s' not in text '%s'" % (msg, text))
-            self.assertTrue("\n reqID=2, rref=<foolscap.test.common.Target object at "
-                            in text)
-            self.assertTrue(", methname=RIMyTarget.fail\n" in text)
-            self.assertTrue("\n args=[]\n" in text)
-            self.assertTrue("\n kwargs={}\n" in text)
-            self.assertTrue("\n the LOCAL failure was:" in text)
+
+            self.assertIn(msg, text)
+            self.assertIn("\n reqID=2, rref=<foolscap.test.common.Target object at ", text)
+            self.assertIn(", methname=RIMyTarget.fail\n", text)
+            self.assertIn("\n args=[]\n", text)
+            self.assertIn("\n kwargs={}\n", text)
+            self.assertIn("\n the LOCAL failure was:", text)
             self.assertEqual(len(failures), 1)
+
             f = failures[0]
+
             self.assertTrue(isinstance(f, failure.Failure))
             self.assertIn("Traceback:", str(f))
-            self.assertIn("exceptions.ValueError", str(f))
+            self.assertIn("<class 'ValueError'>", str(f))
             self.assertIn(": you asked me to fail\n", str(f))
-        d.addBoth(_check)
-        return d
+
+        return d.addBoth(_check)
     testLogLocalFailure.timeout = 2
 
     def testLogRemoteFailure(self):
         self.tubA.setOption("logRemoteFailures", True)
+
         target = Target()
-        logs = []
+        logs   = []
+
         self.addLogObserver(logs.append)
+
         url = self.tubB.registerReference(target)
-        d = self.tubA.getReference(url)
+        d   = self.tubA.getReference(url)
         d.addCallback(lambda rref: rref.callRemote("fail"))
         # this will cause some text to be logged with log.msg. Capture this
         # text and look at it more closely. Log events are sent through an
         # eventual-send, so we need the fireEventually() call to give the
         # event a chance to be put into the list.
         d.addBoth(fireEventually)
+
         def _check(res):
             self.assertTrue(isinstance(res, failure.Failure))
             res.trap(ValueError)
+
             messages = [log.format_message(e) for e in logs]
             failures = [e['failure'] for e in logs if "failure" in e]
-            text = "\n".join(messages)
+            text     = "\n".join(messages)
+
             msg = ("an outbound callRemote (that we [%s] sent to someone "
                    "else [%s]) failed on the far end\n"
                    % (self.tubA.getShortTubID(), self.tubB.getShortTubID()))
-            self.assertTrue(msg in text)
-            self.assertTrue("\n reqID=2, rref=<RemoteReference at "
-                            in text)
-            self.assertTrue((" [%s]>, methname=RIMyTarget.fail\n" % url)
-                            in text)
+
+            self.assertIn(msg, text)
+            self.assertIn("\n reqID=2, rref=<RemoteReference at ", text)
+            self.assertIn(" [%s]>, methname=RIMyTarget.fail\n" % url, text)
+
             #self.failUnless("\n args=[]\n" in text) # TODO: log these too
             #self.failUnless("\n kwargs={}\n" in text)
             self.assertEqual(len(failures), 1)
+
             f = failures[0]
-            self.assertTrue("Traceback (most recent call last):\n"
-                            in str(f))
-            self.assertTrue("\nexceptions.ValueError: you asked me to fail\n"
-                            in str(f))
-        d.addBoth(_check)
-        return d
+
+            self.assertIn("Traceback (most recent call last):", str(f))
+            self.assertIn("ValueError: you asked me to fail\n", str(f))
+
+        return d.addBoth(_check)
     testLogRemoteFailure.timeout = 2
 
     def testBoundMethod(self):
@@ -625,6 +638,7 @@ class TestService(unittest.TestCase):
         d.addCallback(self._testConnect1, t1)
         return d
     testConnect1.timeout = 5
+
     def _testConnect1(self, res, t1):
         self.assertEqual(t1.calls, [(2,3)])
         self.assertEqual(res, 5)
@@ -636,10 +650,10 @@ class TestService(unittest.TestCase):
         d.addCallback(self._testConnect2, t1)
         return d
     testConnect2.timeout = 5
+
     def _testConnect2(self, res, t1):
         self.assertEqual(t1.calls, [(2,3)])
         self.assertEqual(res, 5)
-
 
     def testConnect3(self):
         # test that we can get the reference multiple times
@@ -676,13 +690,14 @@ class TestService(unittest.TestCase):
         d.addCallbacks(self._testBadMethod_cb, self._testBadMethod_eb)
         return d
     testBadMethod.timeout = 5
+
     def _testBadMethod_cb(self, res):
         self.fail("method wasn't supposed to work")
+
     def _testBadMethod_eb(self, f):
         #self.failUnlessEqual(f.type, 'foolscap.tokens.Violation')
         self.assertEqual(f.type, Violation)
-        self.assertTrue(re.search(r'RIMyTarget\(.*\) does not offer missing',
-                                  str(f)))
+        self.assertTrue(re.search(r'RIMyTarget\(.*\) does not offer missing', str(f)))
 
     def testBadMethod2(self):
         t1 = TargetWithoutInterfaces()
@@ -691,11 +706,11 @@ class TestService(unittest.TestCase):
         d.addCallbacks(self._testBadMethod_cb, self._testBadMethod2_eb)
         return d
     testBadMethod2.timeout = 5
+
     def _testBadMethod2_eb(self, f):
-        self.assertEqual(reflect.qual(f.type), 'exceptions.AttributeError')
+        self.assertEqual(reflect.qual(f.type), 'builtins.AttributeError')
         self.assertIn("TargetWithoutInterfaces", f.value)
         self.assertIn(" has no attribute 'remote_missing'", f.value)
-
 
 
 # TODO:
