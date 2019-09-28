@@ -705,8 +705,10 @@ class Banana(protocol.Protocol):
         # which intentionally cause an error set self.logReceiveErrors=False
         # so that the log.err doesn't flunk the test.
         log.msg("Banana.reportReceiveError: an error occured during receive")
+
         if self.logReceiveErrors:
             log.err(f)
+
         if self.debugReceive:
             # trial watches log.err and treats it as a failure, so log the
             # exception in a way that doesn't make trial flunk the test
@@ -1008,36 +1010,39 @@ class Banana(protocol.Protocol):
         try:
             # obtain a new Unslicer to handle the object
             child = top.doOpen(opentype)
+
             if not child:
                 if self.debugReceive:
                     print(" doOpen wants more index tokens")
-                return # they want more index tokens, leave .inOpen=True
+                return  # they want more index tokens, leave .inOpen=True
+
             if self.debugReceive:
                 print(" opened[%d] with %s" % (openCount, child))
+
         except Violation:
             # must discard the rest of the child object. There is no new
             # unslicer pushed yet, so we don't use abandonUnslicer
             self.inOpen = False
             f = BananaFailure()
             self.handleViolation(f, "doOpen", inOpen=True)
-            return
 
-        assert tokens.IUnslicer.providedBy(child), "child is %s" % child
+        else:
+            assert tokens.IUnslicer.providedBy(child), "child is %s" % child
 
-        self.inOpen = False
-        child.protocol = self
-        child.openCount = openCount
-        child.parent = top
-        self.receiveStack.append(child)
+            self.inOpen = False
+            child.protocol = self
+            child.openCount = openCount
+            child.parent = top
+            self.receiveStack.append(child)
 
-        try:
-            child.start(objectCount)
-        except Violation:
-            # the child is now on top, so use abandonUnslicer to discard the
-            # rest of the child
-            f = BananaFailure()
-            # notifies the new child
-            self.handleViolation(f, "start")
+            try:
+                child.start(objectCount)
+            except Violation:
+                # the child is now on top, so use abandonUnslicer to discard the
+                # rest of the child
+                f = BananaFailure()
+                # notifies the new child
+                self.handleViolation(f, "start")
 
     def handleToken(self, token, ready_deferred=None):
         top = self.receiveStack[-1]

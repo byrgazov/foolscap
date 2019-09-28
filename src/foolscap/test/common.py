@@ -387,16 +387,16 @@ class TypesTarget(Referenceable):
 
 
 class ShouldFailMixin:
+    def shouldFail(self, expected_failure, which, substring, callable, *args, **kwargs):
 
-    def shouldFail(self, expected_failure, which, substring,
-                   callable, *args, **kwargs):
         assert substring is None or isinstance(substring, str)
         d = defer.maybeDeferred(callable, *args, **kwargs)
+
         def done(res):
             if isinstance(res, failure.Failure):
                 if not res.check(expected_failure):
-                    self.fail("got failure %s, was expecting %s"
-                              % (res, expected_failure))
+                    self.fail("got failure %s, was expecting %s" % (res, expected_failure))
+
                 if substring:
                     self.failUnless(substring in str(res),
                                     "%s: substring '%s' not in '%s'"
@@ -404,11 +404,10 @@ class ShouldFailMixin:
                 # make the Failure available to a subsequent callback, but
                 # keep it from triggering an errback
                 return [res]
-            else:
-                self.fail("%s was supposed to raise %s, not get '%s'" %
-                          (which, expected_failure, res))
-        d.addBoth(done)
-        return d
+
+            self.fail("%s was supposed to raise %s, not get '%s'" % (which, expected_failure, res))
+
+        return d.addBoth(done)
 
 tubid_low = "3hemthez7rvgvyhjx2n5kdj7mcyar3yt"
 certData_low = \

@@ -66,6 +66,7 @@ class PBRootUnslicer(RootUnslicer):
         if typebyte != tokens.OPEN:
             raise BananaError('top-level must be OPEN')
 
+    """
     def openerCheckToken(self, typebyte, size, opentype):
         if opentype == (b'copyable',) and typebyte in (tokens.STRING, tokens.SVOCAB):
             # TODO: this is silly, of course (should pre-compute maxlen)
@@ -82,6 +83,7 @@ class PBRootUnslicer(RootUnslicer):
         elif typebyte != tokens.BVOCAB:
             raise Violation('opentype not <copyable> ({!r}) and index token 0x{:02x} not BYTES or BVOCAB'\
                 .format(opentype, ord(typebyte)))
+    """
 
     def open(self, opentype):
         # used for lower-level objects, delegated up from childunslicer.open
@@ -674,7 +676,7 @@ class StorageBrokerRootSlicer(ScopedRootSlicer):
     }
 
 PBStorageOpenRegistry = {
-    ('their-reference',): referenceable.TheirReferenceUnslicer,
+    (b'their-reference',): referenceable.TheirReferenceUnslicer,
 }
 
 class StorageBrokerRootUnslicer(PBRootUnslicer):

@@ -685,12 +685,14 @@ class StorageBanana(banana.Banana):
     def sendError(self, msg):
         pass
 
-    def reportViolation(self, why):
-        self.violation = why
+    def reportViolation(self, fail):
+        self.violation = fail
+        # @todo: [bw] ???
+        self.d.errback(fail)  # -or- fail.raiseException()
 
-    def reportReceiveError(self, f):
-        self.disconnectReason = f
-        f.raiseException()
+    def reportReceiveError(self, fail):
+        self.disconnectReason = fail
+        fail.raiseException()
 
 
 class SerializerTransport:
@@ -707,7 +709,8 @@ class SerializerTransport:
 def serialize(obj, outstream=None, root_class=StorageRootSlicer, banana=None):
     """Serialize an object graph into a sequence of bytes. Returns a Deferred
     that fires with the sequence of bytes."""
-    if banana:
+
+    if banana is not None:
         b = banana
     else:
         b = StorageBanana()
@@ -739,25 +742,28 @@ def serialize(obj, outstream=None, root_class=StorageRootSlicer, banana=None):
     return d
 
 
-def unserialize(str_or_instream, banana=None, root_class=StorageRootUnslicer):
+def unserialize(data, banana=None, root_class=StorageRootUnslicer):
     """Unserialize a sequence of bytes back into an object graph."""
+
+    if type(data) is not bytes:
+        raise TypeError(type(data))
+
     if banana:
         b = banana
     else:
         b = StorageBanana()
         b.unslicerClass = root_class
+
     b.connectionMade()
     d = b.prepare() # this will fire with the unserialized object
-    if isinstance(str_or_instream, str):
-        b.dataReceived(str_or_instream)
-    else:
-        raise RuntimeError("input streams not implemented yet")
+
+    b.dataReceived(data)
+
     def _report_error(res):
         if b.disconnectReason:
             return b.disconnectReason
         if b.violation:
             return b.violation
         return res # return the unserialized object
-    d.addCallback(_report_error)
-    return d
 
+    return d.addCallback(_report_error)

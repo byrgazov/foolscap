@@ -112,6 +112,7 @@ class RootSlicer:
         # obj can also be a Slicer, say, a CallSlicer. We return a Deferred
         # which fires when the object has been fully serialized.
         idle = (len(self.protocol.slicerStack) == 1) and not self.sendQueue
+
         objectSentDeferred = Deferred()
         self.sendQueue.append((obj, objectSentDeferred))
 
@@ -198,7 +199,14 @@ class RootUnslicer(BaseUnslicer):
             self.constraint.checkToken(typebyte, size)
 
     def openerCheckToken(self, typebyte, size, opentype):
-        if typebyte == tokens.BYTES:
+        if opentype == (b'copyable',) and typebyte in (tokens.STRING, tokens.SVOCAB):
+            # TODO: this is silly, of course (should pre-compute maxlen)
+            maxlen = reduce(max, map(len, copyable.CopyableRegistry.keys()))
+            if maxlen < size:
+                raise Violation('copyable-classname token is too long, {:d} > {:d}'\
+                    .format(size, maxlen))
+
+        elif typebyte == tokens.BYTES:
             if self.maxIndexLength < size:
                 raise Violation('first opentype BYTES token is too long, {:d} > {:d}'\
                     .format(size, self.maxIndexLength))
@@ -220,17 +228,18 @@ class RootUnslicer(BaseUnslicer):
                     factory = copyable.CopyableRegistry[copyablename]
                 except KeyError:
                     raise Violation("unknown RemoteCopy name '%s'" % copyablename)
-                child = factory()
-                return child
-            return None # still waiting for copyablename
 
-        for reg in self.openRegistries:
-            opener = reg.get(opentype)
-            if opener is not None:
-                child = opener()
-                return child
+                return factory()
 
-        raise Violation("unknown OPEN type %s" % (opentype,))
+            # still waiting for copyablename
+
+        else:
+            for reg in self.openRegistries:
+                opener = reg.get(opentype)
+                if opener is not None:
+                    return opener()
+
+            raise Violation("unknown OPEN type %s" % (opentype,))
 
     def doOpen(self, opentype):
         # this is only called for top-level objects
@@ -262,16 +271,13 @@ class RootUnslicer(BaseUnslicer):
         self.objects = {}
 
         if obj in (ReplaceVocabularyTable, AddToVocabularyTable):
-            # the unslicer has already changed the vocab table
-            return
-
-        if self.protocol.exploded:
+            pass  # the unslicer has already changed the vocab table
+        elif self.protocol.exploded:
             print("protocol exploded, can't deliver object")
             print(self.protocol.exploded)
             self.protocol.receivedObject(self.protocol.exploded)
-            return
-
-        self.protocol.receivedObject(obj) # give finished object to Banana
+        else:
+            self.protocol.receivedObject(obj) # give finished object to Banana
 
     def receiveClose(self):
         raise BananaError("top-level should never receive CLOSE tokens")
