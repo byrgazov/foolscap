@@ -1,28 +1,35 @@
 
 import os, sys, json, time, bz2, base64, re
+import warnings
+import io
+
 import mock
-from six import StringIO
+
 from zope.interface import implementer
+
 from twisted.trial import unittest
 from twisted.application import service
 from twisted.internet import defer, reactor
 from twisted.internet.defer import inlineCallbacks, returnValue
+
 try:
     from twisted import logger as twisted_logger
 except ImportError:
     twisted_logger = None
-from twisted.web import client
+
+from twisted.web    import client
 from twisted.python import log as twisted_log
 from twisted.python import failure, runtime, usage
+
 import foolscap
-from foolscap.logging import gatherer, log, tail, incident, cli, web, \
-     publish, dumper, flogfile
+
+from foolscap.logging  import gatherer, log, tail, incident, cli, web, publish, dumper, flogfile
 from foolscap.logging.interfaces import RILogObserver
-from foolscap.util import format_time, allocate_tcp_port
+from foolscap.util     import format_time, allocate_tcp_port
 from foolscap.eventual import fireEventually, flushEventualQueue
-from foolscap.tokens import NoLocationError
+from foolscap.tokens   import NoLocationError
 from foolscap.test.common import PollMixin, StallMixin
-from foolscap.api import RemoteException, Referenceable, Tub
+from foolscap.api      import RemoteException, Referenceable, Tub
 
 
 class Basic(unittest.TestCase):
@@ -82,8 +89,8 @@ class Basic(unittest.TestCase):
         t = Tub()
         t.log("this goes into the tub")
 
-class Advanced(unittest.TestCase):
 
+class Advanced(unittest.TestCase):
     def testObserver(self):
         l = log.FoolscapLogger()
         out = []
@@ -92,42 +99,50 @@ class Advanced(unittest.TestCase):
         l.msg("one")
         l.msg("two")
         l.msg("ignored", level=log.NOISY)
+
         d = fireEventually()
+
         def _check(res):
             self.assertEqual(len(out), 2)
             self.assertEqual(out[0]["message"], "one")
             self.assertEqual(out[1]["message"], "two")
-        d.addCallback(_check)
-        return d
+
+        return d.addCallback(_check)
 
     def testFileObserver(self):
         basedir = "logging/Advanced/FileObserver"
         os.makedirs(basedir)
-        l = log.FoolscapLogger()
+
+        l  = log.FoolscapLogger()
         fn = os.path.join(basedir, "observer-log.out")
         ob = log.LogFileObserver(fn)
+
         l.addObserver(ob.msg)
         l.msg("one")
         l.msg("two")
+
         d = fireEventually()
+
         def _check(res):
             l.removeObserver(ob.msg)
             ob._logFile.close()
-            f = open(fn, "rb")
-            expected_magic = f.read(len(flogfile.MAGIC))
-            self.assertEqual(expected_magic, flogfile.MAGIC)
+
             events = []
-            for line in f:
-                events.append(json.loads(line))
+
+            with open(fn, 'rb') as f:
+                expected_magic = f.read(len(flogfile.MAGIC))
+
+                for line in f:
+                    events.append(json.loads(line.decode('ascii')))
+
+            self.assertEqual(expected_magic, flogfile.MAGIC)
             self.assertEqual(len(events), 3)
-            self.assertEqual(events[0]["header"]["type"],
-                             "log-file-observer")
-            self.assertEqual(events[0]["header"]["threshold"],
-                             log.OPERATIONAL)
+            self.assertEqual(events[0]["header"]["type"], "log-file-observer")
+            self.assertEqual(events[0]["header"]["threshold"], log.OPERATIONAL)
             self.assertEqual(events[1]["from"], "local")
             self.assertEqual(events[2]["d"]["message"], "two")
-        d.addCallback(_check)
-        return d
+
+        return d.addCallback(_check)
 
     def testDisplace(self):
         l = log.FoolscapLogger()
@@ -224,8 +239,8 @@ class NoStdio(unittest.TestCase):
 
     def setUp(self):
         self.fl = log.FoolscapLogger()
-        self.mock_stdout = StringIO()
-        self.mock_stderr = StringIO()
+        self.mock_stdout = io.StringIO()
+        self.mock_stderr = io.StringIO()
         self.orig_stdout = sys.stdout
         self.orig_stderr = sys.stderr
         sys.stdout = self.mock_stdout
@@ -268,8 +283,10 @@ class NoStdio(unittest.TestCase):
         self.assertTrue(m.startswith(expected), m)
         self.assertIn("ValueError('oops'", m)
 
+
 def ser(what):
     return json.dumps(what, cls=flogfile.ExtendedEncoder)
+
 
 class Serialization(unittest.TestCase):
     def test_lazy_serialization(self):
@@ -295,13 +312,15 @@ class Serialization(unittest.TestCase):
 
     def test_failure(self):
         try:
-            raise ValueError("oops5")
+            raise ValueError('oops5')
         except ValueError:
             f = failure.Failure()
-        out = json.loads(ser({"f": f}))["f"]
-        self.assertEqual(out["@"], "Failure")
-        self.assertIn("Failure exceptions.ValueError: oops5", out["repr"])
-        self.assertIn("traceback", out)
+
+        out = json.loads(ser({'f': f}))['f']
+
+        self.assertEqual(out['@'], 'Failure')
+        self.assertIn('Failure builtins.ValueError: oops5', out['repr'])
+        self.assertIn('traceback', out)
 
     def test_unserializable(self):
         # The code that serializes log events to disk (with JSON) tries very
@@ -311,7 +330,7 @@ class Serialization(unittest.TestCase):
         unjsonable = [set([1,2])]
         self.assertEqual(json.loads(ser(unjsonable)),
                          [{'@': 'UnJSONable',
-                           'repr': 'set([1, 2])',
+                           'repr': '{1, 2}',
                            'message': "log.msg() was given an object that could not be encoded into JSON. I've replaced it with this UnJSONable object. The object's repr is in .repr"}])
 
         # if the repr() fails, we get a different message
@@ -331,10 +350,13 @@ class Serialization(unittest.TestCase):
             if isinstance(o, ValueError):
                 raise TypeError("oops9")
             return real_repr(o)
-        import __builtin__
-        assert __builtin__.repr is repr
-        with mock.patch("__builtin__.repr", really_bad_repr):
+
+        import builtins
+        assert builtins.repr is repr
+
+        with mock.patch("builtins.repr", really_bad_repr):
             s = ser(unrep)
+
         self.assertEqual(json.loads(s),
                          [{"@": "ReallyUnreprable",
                            "message": "log.msg() was given an object that could not be encoded into JSON, and when I tried to repr() it I got an error too. That exception wasn't repr()able either. I give up. Good luck.",
@@ -348,20 +370,26 @@ class Serialization(unittest.TestCase):
         # directly, but are replaced by an "unjsonable" placeholder.
         basedir = "logging/Serialization/not_pickle"
         os.makedirs(basedir)
+
         fl = log.FoolscapLogger()
         ir = incident.IncidentReporter(basedir, fl, "tubid")
         ir.TRAILING_DELAY = None
         fl.msg("first")
+
         unjsonable = [object()] # still picklable
         unserializable = [lambda: "neither pickle nor JSON can capture me"]
+
         # having unserializble data in the logfile should not break the rest
         fl.msg("unjsonable", arg=unjsonable)
         fl.msg("unserializable", arg=unserializable)
         fl.msg("last")
+
         events = list(fl.get_buffered_events())
+
         # if unserializable data breaks incident reporting, this
         # incident_declared() call will cause an exception
         ir.incident_declared(events[0])
+
         # that won't record any trailing events, but does
         # eventually(finished_Recording), so wait for that to conclude
         d = flushEventualQueue()
@@ -380,8 +408,9 @@ class Serialization(unittest.TestCase):
             self.assertEqual(events[3]["d"]["message"], "unserializable")
             self.assertEqual(events[3]["d"]["arg"][0]["@"], "UnJSONable")
             self.assertEqual(events[4]["d"]["message"], "last")
-        d.addCallback(_check)
-        return d
+
+        return d.addCallback(_check)
+
 
 class SuperstitiousQualifier(incident.IncidentQualifier):
     def check_event(self, ev):
@@ -389,16 +418,20 @@ class SuperstitiousQualifier(incident.IncidentQualifier):
             return True
         return False
 
+
 class ImpatientReporter(incident.IncidentReporter):
     TRAILING_DELAY = 1.0
     TRAILING_EVENT_LIMIT = 3
 
+
 class NoFollowUpReporter(incident.IncidentReporter):
     TRAILING_DELAY = None
+
 
 class LogfileReaderMixin:
     def _read_logfile(self, fn):
         return list(flogfile.get_events(fn))
+
 
 class Incidents(unittest.TestCase, PollMixin, LogfileReaderMixin):
     def test_basic(self):
@@ -557,7 +590,7 @@ class Incidents(unittest.TestCase, PollMixin, LogfileReaderMixin):
             ic.add_classifier(classify_foom)
             options = incident.ClassifyOptions()
             options.parseOptions([os.path.join(got_logdir, fn) for fn in files])
-            options.stdout = StringIO()
+            options.stdout = io.StringIO()
             ic.run(options)
             out = options.stdout.getvalue()
             self.assertTrue(out.strip().endswith(": foom"), out)
@@ -566,7 +599,7 @@ class Incidents(unittest.TestCase, PollMixin, LogfileReaderMixin):
             options = incident.ClassifyOptions()
             options.parseOptions(["--verbose"] +
                                  [os.path.join(got_logdir, fn) for fn in files])
-            options.stdout = StringIO()
+            options.stdout = io.StringIO()
             ic2.run(options)
             out = options.stdout.getvalue()
             self.assertIn(".flog.bz2: unknown\n", out)
@@ -901,6 +934,7 @@ class Publish(PollMixin, unittest.TestCase):
         d.addCallback(_got_logport)
         return d
 
+
 class IncidentPublisher(PollMixin, unittest.TestCase):
     def setUp(self):
         self.parent = service.MultiService()
@@ -1063,51 +1097,55 @@ class IncidentPublisher(PollMixin, unittest.TestCase):
         t2.setServiceParent(self.parent)
 
         d = t2.getReference(logport_furl)
+
+        @d.addCallback
         def _got_logport(logport):
             self._logport = logport
             d2 = logport.callRemote("subscribe_to_incidents", ob) # no catchup
             return d2
-        d.addCallback(_got_logport)
+
         def _subscribed(subscription):
             self._subscription = subscription
+
         d.addCallback(_subscribed)
         # pause long enough for the incident names to change
         d.addCallback(lambda res: time.sleep(2))
         d.addCallback(lambda res: t.logger.msg("two", level=log.WEIRD))
-        d.addCallback(lambda res:
-                      self.poll(lambda: bool(ob.incidents), 0.1))
+        d.addCallback(lambda res: self.poll(lambda: bool(ob.incidents), 0.1))
+
         def _triggerof(incident):
             (name, trigger) = incident
             return trigger["message"]
+
         def _check_new(res):
             self.assertEqual(len(ob.incidents), 1)
             self.assertEqual(_triggerof(ob.incidents[0]), "two")
+
         d.addCallback(_check_new)
         d.addCallback(lambda res: self._subscription.callRemote("unsubscribe"))
 
         # now subscribe and catch up on all incidents
         ob2 = Observer()
-        d.addCallback(lambda res:
-                      self._logport.callRemote("subscribe_to_incidents", ob2,
-                                               True, ""))
+        d.addCallback(lambda res: self._logport.callRemote("subscribe_to_incidents", ob2, True, ""))
         d.addCallback(_subscribed)
-        d.addCallback(lambda res:
-                      self.poll(lambda: ob2.done_with_incidents, 0.1))
+        d.addCallback(lambda res: self.poll(lambda: ob2.done_with_incidents, 0.1))
+
         def _check_all(res):
             self.assertEqual(len(ob2.incidents), 2)
             self.assertEqual(_triggerof(ob2.incidents[0]), "one")
             self.assertEqual(_triggerof(ob2.incidents[1]), "two")
-        d.addCallback(_check_all)
 
+        d.addCallback(_check_all)
         d.addCallback(lambda res: time.sleep(2))
         d.addCallback(lambda res: t.logger.msg("three", level=log.WEIRD))
-        d.addCallback(lambda res:
-                      self.poll(lambda: len(ob2.incidents) >= 3, 0.1))
+        d.addCallback(lambda res: self.poll(lambda: len(ob2.incidents) >= 3, 0.1))
+
         def _check_all2(res):
             self.assertEqual(len(ob2.incidents), 3)
             self.assertEqual(_triggerof(ob2.incidents[0]), "one")
             self.assertEqual(_triggerof(ob2.incidents[1]), "two")
             self.assertEqual(_triggerof(ob2.incidents[2]), "three")
+
         d.addCallback(_check_all2)
         d.addCallback(lambda res: self._subscription.callRemote("unsubscribe"))
 
@@ -1136,26 +1174,25 @@ class IncidentPublisher(PollMixin, unittest.TestCase):
         d.addCallback(lambda res: self._subscription.callRemote("unsubscribe"))
 
         return d
-    test_subscribe.timeout = 20
+    test_subscribe.timeout = 10
+
 
 class MyIncidentGathererService(gatherer.IncidentGathererService):
     verbose = False
     cb_new_incident = None
 
     def remote_logport(self, nodeid, publisher):
-        d = gatherer.IncidentGathererService.remote_logport(self,
-                                                            nodeid, publisher)
+        d = gatherer.IncidentGathererService.remote_logport(self, nodeid, publisher)
         d.addCallback(lambda res: self.d.callback(publisher))
         return d
 
     def new_incident(self, abs_fn, rel_fn, nodeid_s, incident):
-        gatherer.IncidentGathererService.new_incident(self, abs_fn, rel_fn,
-                                                      nodeid_s, incident)
+        gatherer.IncidentGathererService.new_incident(self, abs_fn, rel_fn, nodeid_s, incident)
         if self.cb_new_incident:
             self.cb_new_incident((abs_fn, rel_fn))
 
-class IncidentGatherer(unittest.TestCase,
-                       PollMixin, StallMixin, LogfileReaderMixin):
+
+class IncidentGatherer(unittest.TestCase, PollMixin, StallMixin, LogfileReaderMixin):
     def setUp(self):
         self.parent = service.MultiService()
         self.parent.startService()
@@ -1171,17 +1208,22 @@ class IncidentGatherer(unittest.TestCase,
     def create_incident_gatherer(self, basedir, classifiers=[]):
         # create an incident gatherer, which will make its own Tub
         ig_basedir = os.path.join(basedir, "ig")
+
         if not os.path.isdir(ig_basedir):
             os.mkdir(ig_basedir)
             portnum = allocate_tcp_port()
+
             with open(os.path.join(ig_basedir, "port"), "w") as f:
                 f.write("tcp:%d\n" % portnum)
+
             with open(os.path.join(ig_basedir, "location"), "w") as f:
                 f.write("tcp:127.0.0.1:%d\n" % portnum)
-        null = StringIO()
-        ig = MyIncidentGathererService(classifiers=classifiers,
-                                       basedir=ig_basedir, stdout=null)
+
+        null = io.StringIO()
+
+        ig = MyIncidentGathererService(classifiers=classifiers, basedir=ig_basedir, stdout=null)
         ig.d = defer.Deferred()
+
         return ig
 
     def create_connected_tub(self, ig):
@@ -1214,7 +1256,9 @@ class IncidentGatherer(unittest.TestCase,
 
         ig = self.create_incident_gatherer(basedir)
         ig.setServiceParent(self.parent)
+
         incident_d = defer.Deferred()
+
         ig.cb_new_incident = incident_d.callback
         self.create_connected_tub(ig)
 
@@ -1222,6 +1266,7 @@ class IncidentGatherer(unittest.TestCase,
 
         d.addCallback(lambda res: self.logger.msg("boom", level=log.WEIRD))
         d.addCallback(lambda res: incident_d)
+
         def _new_incident(args):
             abs_fn, rel_fn = args
             events = self._read_logfile(abs_fn)
@@ -1236,23 +1281,24 @@ class IncidentGatherer(unittest.TestCase,
             unknowns = [fn.strip() for fn in open(unknowns_fn,"r").readlines()]
             self.assertEqual(len(unknowns), 1)
             self.assertEqual(unknowns[0], rel_fn)
-        d.addCallback(_new_incident)
 
+        d.addCallback(_new_incident)
         # now shut down the gatherer, create a new one with the same basedir
         # (with some classifier functions), remove the existing
         # classifications, and start it up. It should reclassify everything
         # at startup.
-
         d.addCallback(lambda res: ig.disownServiceParent())
 
         def classify_boom(trigger):
             if "boom" in trigger.get("message",""):
                 return "boom"
+
         def classify_foom(trigger):
             if "foom" in trigger.get("message",""):
                 return "foom"
 
         incident_d2 = defer.Deferred()
+
         def _update_classifiers(res):
             self.remove_classified_incidents(ig)
             ig2 = self.create_incident_gatherer(basedir, [classify_boom])
@@ -1285,9 +1331,11 @@ def classify_incident(trigger):
             ig2.cb_new_incident = incident_d2.callback
 
             return ig2.d
+
         d.addCallback(_update_classifiers)
         d.addCallback(lambda res: self.logger.msg("foom", level=log.WEIRD))
         d.addCallback(lambda res: incident_d2)
+
         def _new_incident2(args):
             # this one should be classified as "foom"
             abs_fn, rel_fn = args
@@ -1298,6 +1346,7 @@ def classify_incident(trigger):
             self.assertEqual(fooms[0], rel_fn)
             unknowns_fn = os.path.join(ig.basedir, "classified", "unknown")
             self.assertFalse(os.path.exists(unknowns_fn))
+
         d.addCallback(_new_incident2)
         d.addCallback(lambda res: self.ig2.disownServiceParent())
 
@@ -1338,8 +1387,8 @@ def classify_incident(trigger):
             fooms = [fn.strip() for fn in open(fooms_fn,"r").readlines()]
             self.assertEqual(len(fooms), 1)
             return ig3.d
-        d.addCallback(_update_classifiers_again)
 
+        d.addCallback(_update_classifiers_again)
         d.addCallback(lambda res: self.ig3.disownServiceParent())
 
         # and if we remove all the stored incidents (and the 'latest'
@@ -1357,17 +1406,19 @@ def classify_incident(trigger):
                 os.rmdir(nodedir)
             ig4.setServiceParent(self.parent)
             self.ig4 = ig4
+
         d.addCallback(_create_ig4)
-        d.addCallback(lambda res:
-                      self.poll(lambda : self.ig4.incidents_received == 2))
+        d.addCallback(lambda res: self.poll(lambda: self.ig4.incidents_received == 2))
 
         return d
+    test_emit.timeout = 10
 
     def remove_classified_incidents(self, ig):
         classified = os.path.join(ig.basedir, "classified")
         for category in os.listdir(classified):
             os.remove(os.path.join(classified, category))
         os.rmdir(classified)
+
 
 class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
     def setUp(self):
@@ -1380,21 +1431,22 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         d.addCallback(flushEventualQueue)
         return d
 
-
     def _emit_messages_and_flush(self, res, t):
         log.msg("gathered message here")
         try:
             raise SampleError("whoops1")
         except:
             log.err()
+
         try:
             raise SampleError("whoops2")
         except SampleError:
             log.err(failure.Failure())
-        d = self.stall(None, 1.0)
+
+        d = self.stall(None, 0.5)
         d.addCallback(lambda res: t.disownServiceParent())
         # that will disconnect from the gatherer, which will flush the logfile
-        d.addCallback(self.stall, 1.0)
+        d.addCallback(self.stall, 0.5)
         return d
 
     def _check_gatherer(self, fn, starting_timestamp, expected_tubid):
@@ -1489,7 +1541,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         d.addCallback(lambda res: gatherer.do_rotate())
         d.addCallback(self._check_gatherer, starting_timestamp, expected_tubid)
         return d
-    test_log_gatherer.timeout = 20
+    test_log_gatherer.timeout = 5
 
     def test_log_gatherer_multiple(self):
         # setLocation, then set log-gatherer-furl.
@@ -1537,7 +1589,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         dl.addCallback(lambda res: gatherer2.do_rotate())
         dl.addCallback(self._check_gatherer, starting_timestamp2, expected_tubid)
         return dl
-    test_log_gatherer_multiple.timeout = 40
+    test_log_gatherer_multiple.timeout = 5
 
     def test_log_gatherer2(self):
         # set log-gatherer-furl, then setLocation. Also, use a timed rotator.
@@ -1566,7 +1618,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         d.addCallback(lambda res: gatherer.do_rotate())
         d.addCallback(self._check_gatherer, starting_timestamp, expected_tubid)
         return d
-    test_log_gatherer2.timeout = 20
+    test_log_gatherer2.timeout = 5
 
     def test_log_gatherer_furlfile(self):
         # setLocation, then set log-gatherer-furlfile
@@ -1595,7 +1647,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         d.addCallback(lambda res: gatherer.do_rotate())
         d.addCallback(self._check_gatherer, starting_timestamp, expected_tubid)
         return d
-    test_log_gatherer_furlfile.timeout = 20
+    test_log_gatherer_furlfile.timeout = 5
 
     def test_log_gatherer_furlfile2(self):
         # set log-gatherer-furlfile, then setLocation
@@ -1619,16 +1671,19 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         t.setOption("log-gatherer-furlfile", gatherer_furlfile)
         # one bug we had was that the log-gatherer was contacted before
         # setLocation had occurred, so exercise that case
-        d = self.stall(None, 1.0)
+
+        d = self.stall(None, 0.5)
+
         def _start(res):
             t.setLocation("127.0.0.1:%d" % portnum)
             return gatherer.d
+
         d.addCallback(_start)
         d.addCallback(self._emit_messages_and_flush, t)
         d.addCallback(lambda res: gatherer.do_rotate())
         d.addCallback(self._check_gatherer, starting_timestamp, expected_tubid)
         return d
-    test_log_gatherer_furlfile2.timeout = 20
+    test_log_gatherer_furlfile2.timeout = 5
 
     def test_log_gatherer_furlfile_multiple(self):
         basedir = "logging/Gatherer/log_gatherer_furlfile_multiple"
@@ -1688,7 +1743,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         d.addCallback(lambda res: gatherer3.do_rotate())
         d.addCallback(self._check_gatherer, starting_timestamp3, expected_tubid)
         return d
-    test_log_gatherer_furlfile_multiple.timeout = 20
+    test_log_gatherer_furlfile_multiple.timeout = 5
 
     def test_log_gatherer_empty_furlfile(self):
         basedir = "logging/Gatherer/log_gatherer_empty_furlfile"
@@ -1708,7 +1763,7 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         lp_furl = t.getLogPortFURL()
         del lp_furl
         t.log("this message shouldn't make anything explode")
-    test_log_gatherer_empty_furlfile.timeout = 20
+    test_log_gatherer_empty_furlfile.timeout = 5
 
     def test_log_gatherer_missing_furlfile(self):
         basedir = "logging/Gatherer/log_gatherer_missing_furlfile"
@@ -1728,16 +1783,18 @@ class Gatherer(unittest.TestCase, LogfileReaderMixin, StallMixin, PollMixin):
         lp_furl = t.getLogPortFURL()
         del lp_furl
         t.log("this message shouldn't make anything explode")
-    test_log_gatherer_missing_furlfile.timeout = 20
+    test_log_gatherer_missing_furlfile.timeout = 5
 
 
 class Tail(unittest.TestCase):
     def test_logprinter(self):
         target_tubid_s = "jiijpvbge2e3c3botuzzz7la3utpl67v"
+
         options1 = {"save-to": None,
                    "verbose": None,
                    "timestamps": "short-local"}
-        out = StringIO()
+
+        out = io.StringIO()
         lp = tail.LogPrinter(options1, target_tubid_s[:8], out)
         lp.got_versions({})
         lp.remote_msg({"time": 1207005906.527782,
@@ -1745,9 +1802,10 @@ class Tail(unittest.TestCase):
                        "num": 123,
                        "message": "howdy",
                        })
+
         outmsg = out.getvalue()
         # this contains a localtime string, so don't check the hour
-        self.assertTrue(":06.527 L25 []#123 howdy" in outmsg)
+        self.assertIn(":06.527 L25 []#123 howdy", outmsg)
 
         lp.remote_msg({"time": 1207005907.527782,
                        "level": 25,
@@ -1755,9 +1813,10 @@ class Tail(unittest.TestCase):
                        "format": "howdy %(there)s",
                        "there": "pardner",
                        })
+
         outmsg = out.getvalue()
         # this contains a localtime string, so don't check the hour
-        self.assertTrue(":07.527 L25 []#124 howdy pardner" in outmsg)
+        self.assertIn(":07.527 L25 []#124 howdy pardner", outmsg)
 
         try:
             raise RuntimeError("fake error")
@@ -1772,18 +1831,17 @@ class Tail(unittest.TestCase):
                        })
         outmsg = out.getvalue()
 
-        self.assertTrue(":50.002 L30 []#125 oops\n FAILURE:\n" in outmsg,
-                        outmsg)
-        self.assertTrue("exceptions.RuntimeError" in outmsg, outmsg)
-        self.assertTrue(": fake error" in outmsg, outmsg)
-        self.assertTrue("--- <exception caught here> ---\n" in outmsg, outmsg)
+        self.assertIn(":50.002 L30 []#125 oops\n FAILURE:\n", outmsg)
+        self.assertIn("<class 'RuntimeError'>", outmsg)
+        self.assertIn(": fake error", outmsg)
+        self.assertIn("--- <exception caught here> ---\n", outmsg)
 
     def test_logprinter_verbose(self):
         target_tubid_s = "jiijpvbge2e3c3botuzzz7la3utpl67v"
         options1 = {"save-to": None,
                    "verbose": True,
                    "timestamps": "short-local"}
-        out = StringIO()
+        out = io.StringIO()
         lp = tail.LogPrinter(options1, target_tubid_s[:8], out)
         lp.got_versions({})
         lp.remote_msg({"time": 1207005906.527782,
@@ -1803,7 +1861,7 @@ class Tail(unittest.TestCase):
         options = {"save-to": saveto_filename,
                    "verbose": False,
                    "timestamps": "short-local"}
-        out = StringIO()
+        out = io.StringIO()
         lp = tail.LogPrinter(options, target_tubid_s[:8], out)
         lp.got_versions({})
         lp.remote_msg({"time": 1207005906.527782,
@@ -1814,15 +1872,18 @@ class Tail(unittest.TestCase):
         outmsg = out.getvalue()
         del outmsg
         lp.saver.disconnected() # cause the file to be closed
-        f = open(saveto_filename, "rb")
-        expected_magic = f.read(len(flogfile.MAGIC))
-        self.assertEqual(expected_magic, flogfile.MAGIC)
-        data = json.loads(f.readline()) # header
-        self.assertEqual(data["header"]["type"], "tail")
-        data = json.loads(f.readline()) # event
-        self.assertEqual(data["from"], "jiijpvbg")
-        self.assertEqual(data["d"]["message"], "howdy")
-        self.assertEqual(data["d"]["num"], 123)
+
+        with open(saveto_filename, "rb") as f:
+            expected_magic = f.read(len(flogfile.MAGIC))
+            self.assertEqual(expected_magic, flogfile.MAGIC)
+
+            data = json.loads(f.readline().decode('ascii'))  # header
+            self.assertEqual(data["header"]["type"], "tail")
+
+            data = json.loads(f.readline().decode('ascii')) # event
+            self.assertEqual(data["from"], "jiijpvbg")
+            self.assertEqual(data["d"]["message"], "howdy")
+            self.assertEqual(data["d"]["num"], 123)
 
     def test_options(self):
         basedir = "logging/Tail/options"
@@ -1967,22 +2028,25 @@ class LogfileWriterMixin:
     def create_incident(self):
         if not os.path.exists(self.basedir):
             os.makedirs(self.basedir)
+
         l = log.FoolscapLogger()
         l.setLogDir(self.basedir)
         l.setIncidentReporterFactory(NoFollowUpReporter)
 
         d = defer.Deferred()
+
         def _done(name, trigger):
-            d.callback( (name,trigger) )
+            d.callback((name, trigger))
+
         l.addImmediateIncidentObserver(_done)
 
-        l.msg("one")
-        l.msg("two")
-        l.msg("boom", level=log.WEIRD)
-        l.msg("four")
+        l.msg('one')
+        l.msg('two')
+        l.msg('boom', level=log.WEIRD)
+        l.msg('four')
 
         d.addCallback(lambda name_trigger:
-                      os.path.join(self.basedir, name_trigger[0]+".flog.bz2"))
+                os.path.join(self.basedir, name_trigger[0] + ".flog.bz2"))
 
         return d
 
@@ -1993,6 +2057,7 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
     def test_dump(self):
         self.basedir = "logging/Dumper/dump"
         d = self.create_logfile()
+
         def _check(fn):
             events = self._read_logfile(fn)
 
@@ -2000,20 +2065,24 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
             # initialize the LogDumper() timestamp mode
             d.options = dumper.DumpOptions()
             d.options.parseOptions([fn])
+
             tmode = d.options["timestamps"]
 
             argv = ["flogtool", "dump", fn]
-            (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
+            (out, err) = cli.run_flogtool(argv[1:], run_by_human=False)
+
             self.assertEqual(err, "")
-            lines = list(StringIO(out).readlines())
-            self.assertTrue(lines[0].strip().startswith("Application versions"),
-                            lines[0])
+
+            lines = list(io.StringIO(out).readlines())
+
+            self.assertTrue(lines[0].strip().startswith("Application versions"), lines[0])
+
             mypid = os.getpid()
             self.assertEqual(lines[3].strip(), "PID: %s" % mypid, lines[3])
+
             lines = lines[5:]
-            line0 = "local#%d %s: one" % (events[1]["d"]["num"],
-                                          format_time(events[1]["d"]["time"],
-                                                      tmode))
+            line0 = "local#%d %s: one" % (events[1]["d"]["num"], format_time(events[1]["d"]["time"], tmode))
+
             self.assertEqual(lines[0].strip(), line0)
             self.assertTrue("FAILURE:" in lines[3])
             self.assertIn("test_logging.SampleError", lines[4])
@@ -2021,11 +2090,13 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
             self.assertTrue(lines[-1].startswith("local#3 "))
 
             argv = ["flogtool", "dump", "--just-numbers", fn]
-            (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
+            (out, err) = cli.run_flogtool(argv[1:], run_by_human=False)
+
             self.assertEqual(err, "")
-            lines = list(StringIO(out).readlines())
-            line0 = "%s %d" % (format_time(events[1]["d"]["time"], tmode),
-                               events[1]["d"]["num"])
+
+            lines = list(io.StringIO(out).readlines())
+            line0 = "%s %d" % (format_time(events[1]["d"]["time"], tmode), events[1]["d"]["num"])
+
             self.assertEqual(lines[0].strip(), line0)
             self.assertTrue(lines[1].strip().endswith(" 1"))
             self.assertTrue(lines[-1].strip().endswith(" 3"))
@@ -2034,35 +2105,44 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
 
             argv = ["flogtool", "dump", "--rx-time", fn]
             (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
+
             self.assertEqual(err, "")
-            lines = list(StringIO(out).readlines())
-            self.assertTrue(lines[0].strip().startswith("Application versions"),
-                            lines[0])
+
+            lines = list(io.StringIO(out).readlines())
+
+            self.assertTrue(lines[0].strip().startswith("Application versions"), lines[0])
+
             mypid = os.getpid()
+
             self.assertEqual(lines[3].strip(), "PID: %s" % mypid, lines[3])
+
             lines = lines[5:]
             line0 = "local#%d rx(%s) emit(%s): one" % \
                     (events[1]["d"]["num"],
                      format_time(events[1]["rx_time"], tmode),
                      format_time(events[1]["d"]["time"], tmode))
+
             self.assertEqual(lines[0].strip(), line0)
             self.assertTrue(lines[-1].strip().endswith(" four"))
 
             argv = ["flogtool", "dump", "--verbose", fn]
             (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
             self.assertEqual(err, "")
-            lines = list(StringIO(out).readlines())
+
+            lines = list(io.StringIO(out).readlines())
+
             self.assertTrue("header" in lines[0])
             self.assertTrue(re.search(r"u?'message': u?'one'", lines[1]), lines[1])
             self.assertTrue("'level': 20" in lines[1])
             self.assertTrue(": four: {" in lines[-1])
 
-        d.addCallback(_check)
-        return d
+        return d.addCallback(_check)
 
     def test_incident(self):
         self.basedir = "logging/Dumper/incident"
+
         d = self.create_incident()
+
         def _check(fn):
             events = self._read_logfile(fn)
             # for sanity, make sure we created the incident correctly
@@ -2072,7 +2152,7 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
             argv = ["flogtool", "dump", fn]
             (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
             self.assertEqual(err, "")
-            lines = list(StringIO(out).readlines())
+            lines = list(io.StringIO(out).readlines())
             self.assertEqual(len(lines), 8)
             self.assertEqual(lines[0].strip(),
                              "Application versions (embedded in logfile):")
@@ -2084,8 +2164,9 @@ class Dumper(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
             self.assertFalse("[INCIDENT-TRIGGER]" in lines[5])
             self.assertFalse("[INCIDENT-TRIGGER]" in lines[6])
             self.assertTrue(lines[7].strip().endswith(": boom [INCIDENT-TRIGGER]"))
-        d.addCallback(_check)
-        return d
+
+        return d.addCallback(_check)
+    test_incident.timeout = 2
 
     def test_oops_furl(self):
         self.basedir = os.path.join("logging", "Dumper", "oops_furl")
@@ -2273,7 +2354,7 @@ class Filter(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
             argv = ["flogtool", "filter", "--verbose", fn2bz2, fn2]
             (out,err) = cli.run_flogtool(argv[1:], run_by_human=False)
             self.assertTrue("copied 5 of 5 events into new file" in out, out)
-            lines = [l.strip() for l in StringIO(out).readlines()]
+            lines = [l.strip() for l in io.StringIO(out).readlines()]
             self.assertEqual(lines,
                              ["HEADER", "0", "1", "2", "3",
                               "copied 5 of 5 events into new file"])
@@ -2302,22 +2383,25 @@ class Filter(unittest.TestCase, LogfileWriterMixin, LogfileReaderMixin):
 @inlineCallbacks
 def getPage(url):
     a = client.Agent(reactor)
-    response = yield a.request("GET", url)
-    import warnings
+    response = yield a.request(b"GET", url.encode('ascii'))
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         # Twisted can emit a spurious internal warning here ("Using readBody
         # with a transport that does not have an abortConnection method")
         # which seems to be https://twistedmatrix.com/trac/ticket/8227
         page = yield client.readBody(response)
+
     if response.code != 200:
-        raise ValueError("request failed (%d), page contents were: %s" % (
-            response.code, page))
-    returnValue(page)
+        raise ValueError("request failed (%d), page contents were: %s" % (response.code, page))
+
+    returnValue(page.decode('utf8'))
+
 
 class Web(unittest.TestCase):
     def setUp(self):
         self.viewer = None
+
     def tearDown(self):
         d = defer.maybeDeferred(unittest.TestCase.tearDown, self)
         if self.viewer:
@@ -2328,49 +2412,56 @@ class Web(unittest.TestCase):
     def test_basic(self):
         basedir = "logging/Web/basic"
         os.makedirs(basedir)
+
         l = log.FoolscapLogger()
+
         fn = os.path.join(basedir, "flog.out")
         ob = log.LogFileObserver(fn)
+
         l.addObserver(ob.msg)
         l.msg("one")
+
         lp = l.msg("two")
+
         l.msg("three", parent=lp, failure=failure.Failure(RuntimeError("yo")))
         l.msg("four", level=log.UNUSUAL)
+
         yield fireEventually()
+
         l.removeObserver(ob.msg)
         ob._stop()
 
         portnum = allocate_tcp_port()
-        argv = ["-p", "tcp:%d:interface=127.0.0.1" % portnum,
-                "--quiet",
-                fn]
+        argv = ["-p", "tcp:%d:interface=127.0.0.1" % portnum, "--quiet", fn]
+
         options = web.WebViewerOptions()
         options.parseOptions(argv)
+
         self.viewer = web.WebViewer()
         self.url = yield self.viewer.start(options)
+
         self.baseurl = self.url[:self.url.rfind("/")] + "/"
 
         page = yield getPage(self.url)
         mypid = os.getpid()
-        self.assertTrue("PID %s" % mypid in page,
-                        "didn't see 'PID %s' in '%s'" % (mypid, page))
-        self.assertTrue("Application Versions:" in page, page)
-        self.assertTrue("foolscap: %s" % foolscap.__version__ in page, page)
-        self.assertTrue("4 events covering" in page)
-        self.assertTrue('href="summary/0-20">3 events</a> at level 20'
-                        in page)
+
+        self.assertIn("PID %s" % mypid, page)
+        self.assertIn("Application Versions:", page)
+        self.assertIn("foolscap: %s" % foolscap.__version__, page)
+        self.assertIn("4 events covering", page)
+        self.assertIn('href="summary/0-20">3 events</a> at level 20', page)
 
         page = yield getPage(self.baseurl + "summary/0-20")
-        self.assertTrue("Events at level 20" in page)
-        self.assertTrue(": two" in page)
-        self.assertFalse("four" in page)
+        self.assertIn("Events at level 20", page)
+        self.assertIn(": two", page)
+        self.assertNotIn("four", page)
 
         def check_all_events(page):
-            self.assertTrue("3 root events" in page)
-            self.assertTrue(": one</span>" in page)
-            self.assertTrue(": two</span>" in page)
-            self.assertTrue(": three FAILURE:" in page)
-            self.assertTrue(": UNUSUAL four</span>" in page)
+            self.assertIn("3 root events", page)
+            self.assertIn(": one</span>", page)
+            self.assertIn(": two</span>", page)
+            self.assertIn(": three FAILURE:", page)
+            self.assertIn(": UNUSUAL four</span>", page)
 
         page = yield getPage(self.baseurl + "all-events")
         check_all_events(page)

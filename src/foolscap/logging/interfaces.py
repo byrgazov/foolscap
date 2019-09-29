@@ -6,24 +6,30 @@ from foolscap.schema import DictOf, ListOf, Any, Optional, ChoiceOf
 TubID = str # printable, base32 encoded
 Incarnation = (str, ChoiceOf(str, None))
 Header = DictOf(str, Any())
-Event = DictOf(str, Any()) # this has message:, level:, facility:, etc
+Event  = DictOf(str, Any()) # this has message:, level:, facility:, etc
 EventWrapper = DictOf(str, Any()) # this has from:, rx_time:, and d:
+
 
 class RILogObserver(RemoteInterface):
     __remote_name__ = "RILogObserver.foolscap.lothar.com"
+
     def msg(logmsg=Event):
-        return None
+        pass
+
     def done():
-        return None
+        pass
 
     def new_incident(name=str, trigger=Event):
         # should this give (tubid, incarnation, trigger) like list_incidents?
-        return None
+        pass
+
     def done_with_incident_catchup():
-        return None
+        pass
+
 
 class RILogFile(RemoteInterface):
     __remote_name__ = "RILogFile.foolscap.lothar.com"
+
     def get_header():
         # (tubid, incarnation,
         #  (first_event: number, time), (last_event: number, time),
@@ -31,13 +37,15 @@ class RILogFile(RemoteInterface):
         #  level_map, # maps string severity to count of messages
         # )
         return (TubID, int, (int, int), (int, int), int, DictOf(str, int))
+
     def get_events(receiver=RILogObserver):
         """The designated receiver will be sent every event in the logfile,
         followed by a done() call."""
-        return None
+
 
 class RISubscription(RemoteInterface):
     __remote_name__ = "RISubscription.foolscap.lothar.com"
+
     def unsubscribe():
         """Cancel a subscription. Once this method has been completed (and
         its Deferred has fired), no further messages will be received by the
@@ -46,12 +54,14 @@ class RISubscription(RemoteInterface):
 
         This method is idempotent: calling it multiple times has the same
         effect as calling it just once."""
-        return None
+
 
 class RILogPublisher(RemoteInterface):
     __remote_name__ = "RILogPublisher.foolscap.lothar.com"
+
     def get_versions():
         return DictOf(str, str)
+
     def get_pid():
         return int
 
@@ -62,6 +72,7 @@ class RILogPublisher(RemoteInterface):
         receiving messages.
         """
         return RISubscription
+
     def unsubscribe(subscription=Any()):
         # NOTE: this is deprecated. Use subscription.unsubscribe() instead.
         # I don't know how to get the constraint right: unsubscribe() should
@@ -120,14 +131,18 @@ class RILogPublisher(RemoteInterface):
         # than the circular buffers that we keep around anyways.
         return (Header, ListOf(Event))
 
+
 class RILogGatherer(RemoteInterface):
     __remote_name__ = "RILogGatherer.foolscap.lothar.com"
+
     def logport(nodeid=TubID, logport=RILogPublisher):
-        return None
+        pass
+
 
 class IIncidentReporter(Interface):
     def incident_declared(triggering_event):
         """This is called when an Incident needs to be recorded."""
+
     def new_trigger(triggering_event):
         """This is called when a triggering event occurs while an incident is
         already being reported. If the event happened later, it would trigger
@@ -139,9 +154,9 @@ class IIncidentReporter(Interface):
         the reporter the opportunity to mark the event somehow, for the
         benefit of incident-file analysis tools.
         """
+
     def is_active():
         """Returns True if the reporter is still running. While in this
         state, new Incident triggers will be passed to the existing reporter
         instead of causing a new Incident to be declared. This will tend to
         coalesce back-to-back problems into a single Incident."""
-

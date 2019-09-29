@@ -1,12 +1,16 @@
 
 import os
-from collections import deque
+import operator as O
+import collections
+
 from zope.interface import implementer
 from twisted.python import filepath
+
 from foolscap.referenceable import Referenceable
 from foolscap.logging.interfaces import RISubscription, RILogPublisher
 from foolscap.logging import app_versions, flogfile
 from foolscap.eventual import eventually
+
 
 @implementer(RISubscription)
 class Subscription(Referenceable):
@@ -19,7 +23,7 @@ class Subscription(Referenceable):
         self.observer = observer
         self.logger = logger
         self.subscribed = False
-        self.queue = deque()
+        self.queue = collections.deque()
         self.in_flight = 0
         self.marked_for_sending = False
         #self.messages_dropped = 0
@@ -31,13 +35,15 @@ class Subscription(Referenceable):
         # observer" instead of a regular one.
         self.logger.addImmediateObserver(self.send)
         self._nod_marker = self.observer.notifyOnDisconnect(self.unsubscribe)
+
         if catch_up:
             # send any catch-up events in a single batch, before we allow any
             # other events to be generated (and sent). This lets the
             # subscriber see events in sorted order. We bypass the bounded
             # queue for this.
             events = list(self.logger.get_buffered_events())
-            events.sort(lambda a,b: cmp(a['num'], b['num']))
+            events.sort(key=O.itemgetter('num'))
+
             for e in events:
                 self.observer.callRemoteOnly("msg", e)
 
@@ -46,6 +52,7 @@ class Subscription(Referenceable):
             self.logger.removeImmediateObserver(self.send)
             self.observer.dontNotifyOnDisconnect(self._nod_marker)
             self.subscribed = False
+
     def remote_unsubscribe(self):
         return self.unsubscribe()
 
@@ -88,9 +95,9 @@ class Subscription(Referenceable):
         #print "PUBLISH FAILED: %s" % f
         self.unsubscribe()
 
+
 @implementer(RISubscription)
 class IncidentSubscription(Referenceable):
-
     def __init__(self, observer, logger, publisher):
         self.observer = observer
         self.logger = logger
@@ -110,8 +117,7 @@ class IncidentSubscription(Referenceable):
             fn = new[name]
             trigger = self.publisher.get_incident_trigger(fn)
             if trigger:
-                self.observer.callRemoteOnly("new_incident", name,
-                                             _keys_to_bytes(trigger))
+                self.observer.callRemoteOnly("new_incident", name, trigger)
         self.observer.callRemoteOnly("done_with_incident_catchup")
 
     def unsubscribe(self):
@@ -130,15 +136,6 @@ class IncidentSubscription(Referenceable):
         print("INCIDENT PUBLISH FAILED: %s" % f)
         self.unsubscribe()
 
-
-def _keys_to_bytes(d):
-    # the interfaces.Header and Event schema require the keys to be bytes
-    # ("str", since we're in py2), but we get unicode since we're pulling
-    # from a JSON-serialized incident file. These keys are fixed strings
-    # like (message, level, facility, from, rx_time, d). Encode to ASCII to
-    # make this clear. The user-provided data lives in the *values* of
-    # these dicts, which are unconstrained (the schemas use Any())
-    return dict([ (k.encode("ascii"), v) for (k,v) in d.items()])
 
 @implementer(RILogPublisher)
 class LogPublisher(Referenceable):
@@ -184,9 +181,9 @@ class LogPublisher(Referenceable):
 
     def remote_get_versions(self):
         return app_versions.versions
+
     def remote_get_pid(self):
         return os.getpid()
-
 
     def remote_subscribe_to_all(self, observer, catch_up=False):
         s = Subscription(observer, self._logger)
@@ -196,7 +193,6 @@ class LogPublisher(Referenceable):
 
     def remote_unsubscribe(self, s):
         return s.unsubscribe()
-
 
     def trim(self, s, *suffixes):
         for suffix in suffixes:
@@ -228,12 +224,13 @@ class LogPublisher(Referenceable):
         for (name,fn) in self.list_incident_names(since):
             trigger = self.get_incident_trigger(fn)
             if trigger:
-                incidents[name] = _keys_to_bytes(trigger)
+                incidents[name] = trigger
         return incidents
 
     def remote_get_incident(self, name):
         if not name.startswith("incident"):
             raise KeyError("bad incident name %s" % name)
+
         incident_dir = filepath.FilePath(self._logger.logdir)
         abs_fn = incident_dir.child(name).path + ".flog"
         try:
@@ -242,10 +239,12 @@ class LogPublisher(Referenceable):
                 fn = abs_fn
             events = flogfile.get_events(fn)
             # note the generator isn't actually cycled yet, not until next()
-            header = _keys_to_bytes(next(events)["header"])
+            header = next(events)["header"]
         except EnvironmentError:
             raise KeyError("no incident named %s" % name)
-        wrapped_events = [_keys_to_bytes(event["d"]) for event in events]
+
+        wrapped_events = [event['d'] for event in events]
+
         return (header, wrapped_events)
 
     def remote_subscribe_to_incidents(self, observer, catch_up=False, since=""):

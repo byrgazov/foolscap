@@ -78,6 +78,7 @@ class GatheringBase(service.MultiService, Referenceable):
         if self.verbose:
             print("Gatherer waiting at:", self.my_furl)
 
+
 class CreateGatherOptions(usage.Options):
     """flogtool create-gatherer GATHERER_DIRECTORY"""
     stdout = sys.stdout
@@ -103,6 +104,7 @@ class CreateGatherOptions(usage.Options):
     def postOptions(self):
         if not self["location"]:
             raise usage.UsageError("--location= is mandatory")
+
 
 @implementer(RILogObserver)
 class Observer(Referenceable):
@@ -328,6 +330,7 @@ class CreateIncidentGatherOptions(usage.Options):
         if not self["location"]:
             raise usage.UsageError("--location= is mandatory")
 
+
 @implementer(RILogObserver)
 class IncidentObserver(Referenceable):
 
@@ -374,21 +377,27 @@ class IncidentObserver(Referenceable):
     def maybe_fetch_incident(self):
         # only fetch one incident at a time, to keep the sender's outbound
         # memory usage to a reasonable level
+
         if self.incident_fetch_outstanding:
             return
+
         if not self.incidents_wanted:
             return
+
         self.incident_fetch_outstanding = True
         (name, trigger) = self.incidents_wanted.pop(0)
+
         print("fetching incident", name, file=self.stdout)
+
         d = self.publisher.callRemote("get_incident", name)
+
         def _clear_outstanding(res):
             self.incident_fetch_outstanding = False
             return res
+
         d.addBoth(_clear_outstanding)
         d.addCallback(self._got_incident, name, trigger)
-        d.addErrback(tw_log.err,
-                     "IncidentObserver.get_incident or _got_incident")
+        d.addErrback(tw_log.err, "IncidentObserver.get_incident or _got_incident")
         d.addBoth(lambda ign: self.maybe_fetch_incident())
 
     def _got_incident(self, incident, name, trigger):
@@ -420,6 +429,7 @@ class IncidentObserver(Referenceable):
     def remote_done_with_incident_catchup(self):
         self.caught_up_d.callback(None)
         return None
+
 
 @implementer(RILogGatherer)
 class IncidentGathererService(GatheringBase, IncidentClassifierBase):

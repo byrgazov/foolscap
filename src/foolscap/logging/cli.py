@@ -13,6 +13,7 @@ from foolscap.logging.web import WebViewerOptions, WebViewer
 from foolscap.logging.filter import FilterOptions, Filter
 from foolscap.logging.incident import ClassifyOptions, IncidentClassifier
 
+
 class Options(usage.Options):
     synopsis = "Usage: flogtool (tail|create-gatherer|dump|filter|web-viewer)"
 
@@ -77,6 +78,7 @@ def dispatch(command, options):
     else:
         print("unknown command '%s'" % command)
         raise NotImplementedError
+
 
 def run_flogtool(argv=None, run_by_human=True):
     if argv:

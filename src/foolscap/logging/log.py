@@ -70,6 +70,7 @@ class Count:
         self.n += 1
         return self.n
 
+
 class FoolscapLogger:
     DEFAULT_SIZELIMIT = 100
     DEFAULT_THRESHOLD = NOISY
@@ -96,7 +97,7 @@ class FoolscapLogger:
         self.recent_recorded_incidents = []
 
     def get_incarnation(self):
-        unique = binascii.b2a_hex(os.urandom(8))
+        unique = binascii.b2a_hex(os.urandom(8)).decode('ascii')
         sequential = None
         return (unique, sequential)
 
@@ -144,6 +145,7 @@ class FoolscapLogger:
 
     def addImmediateIncidentObserver(self, observer):
         self._immediate_incident_observers.append(observer)
+
     def removeImmediateIncidentObserver(self, observer):
         self._immediate_incident_observers.remove(observer)
 
@@ -157,13 +159,13 @@ class FoolscapLogger:
 
     def set_generation_threshold(self, level, facility=None):
         self.thresholds[facility] = level
+
     def get_generation_threshold(self, facility=None):
         return self.thresholds.get(facility, self.DEFAULT_THRESHOLD)
 
     def msg(self, *args, **kwargs):
         """
-        @param parent: the event number of the most direct parent of this
-                       event
+        @param parent: the event number of the most direct parent of this event
         @param facility: the slash-joined facility name, or None
         @param level: the numeric severity level, like NOISY or SCARY
         @param stacktrace: a string stacktrace, or True to generate one
@@ -179,23 +181,23 @@ class FoolscapLogger:
 
         try:
             self._msg(*args, **kwargs)
-        except Exception as e:
+        except Exception as exc:
             try:
-                errormsg = ("internal error in log._msg,"
-                            " args=%r, kwargs=%r, exception=%r"
-                            % (args, kwargs, e))
-                self._msg(errormsg, num=num, level=WEIRD,
-                          facility="foolscap/internal-error")
-            except:
-                pass # bummer
+                errormsg = "internal error in log._msg, args=%r, kwargs=%r, exception=%r" % (args, kwargs, exc)
+                self._msg(errormsg, num=num, level=WEIRD, facility="foolscap/internal-error")
+            except Exception:
+                pass  # bummer
         return num
 
     def _msg(self, *args, **kwargs):
         facility = kwargs.get('facility')
+
         if "level" not in kwargs:
             kwargs['level'] = OPERATIONAL
+
         level = kwargs["level"]
         threshold = self.get_generation_threshold(facility)
+
         if level < threshold:
             return # not worth logging
 
@@ -218,6 +220,7 @@ class FoolscapLogger:
 
         if event.get('stacktrace', False) is True:
             event['stacktrace'] = traceback.format_stack()
+
         event['incarnation'] = self.incarnation
         self.add_event(facility, level, event)
 
@@ -290,21 +293,23 @@ class FoolscapLogger:
         # absolute pathname to the NAME.flog.bz2 file.
         self.incidents_recorded += 1
         self.recent_recorded_incidents.append(filename)
+
         while len(self.recent_recorded_incidents) > self.MAX_RECORDED_INCIDENTS:
             self.recent_recorded_incidents.pop(0)
+
         # publish these to interested parties
-        for o in self._immediate_incident_observers:
-            o(name, trigger)
+        for observer in self._immediate_incident_observers:
+            observer(name, trigger)
 
     def get_active_incident_reporter(self):
         if self.active_incident_reporter_weakref:
             ir = self.active_incident_reporter_weakref()
             if ir and ir.is_active():
                 return ir
-        return None
 
     def setLogPort(self, logport):
         self._logport = logport
+
     def getLogPort(self):
         return self._logport
 
@@ -447,6 +452,7 @@ def bridgeLogsToTwisted(filter=None,
             twisted_logger.msg(format_message(event), **args)
     foolscap_logger.addObserver(_to_twisted)
 
+
 class LogFileObserver:
     def __init__(self, filename, level=OPERATIONAL):
         if filename.endswith(".bz2"):
@@ -454,8 +460,10 @@ class LogFileObserver:
             self._logFile = bz2.BZ2File(filename, "w")
         else:
             self._logFile = open(filename, "wb")
+
         self._level = level
-        self._logFile.write(flogfile.MAGIC.encode('utf8', 'replace'))
+        self._logFile.write(flogfile.MAGIC)
+
         flogfile.serialize_header(self._logFile,
                                   "log-file-observer",
                                   versions=app_versions.versions,

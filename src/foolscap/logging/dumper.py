@@ -6,6 +6,7 @@ from foolscap.logging import flogfile
 from foolscap.logging.log import format_message
 from foolscap.util import format_time, FORMAT_TIME_MODES
 
+
 class DumpOptions(usage.Options):
     stdout = sys.stdout
     stderr = sys.stderr
@@ -28,6 +29,7 @@ class DumpOptions(usage.Options):
 
     def parseArgs(self, dumpfile):
         self.dumpfile = dumpfile
+
 
 class LogDumper:
     def __init__(self):

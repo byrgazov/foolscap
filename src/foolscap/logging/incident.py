@@ -1,16 +1,22 @@
 
+import operator as O
 import sys, os.path, time, bz2
-from pprint import pprint
+import pprint
+
 from zope.interface import implementer
+
 from twisted.python import usage
 from twisted.internet import reactor
+
 from foolscap.logging.interfaces import IIncidentReporter
 from foolscap.logging import levels, app_versions, flogfile
 from foolscap.eventual import eventually
 from foolscap.util import move_into_place
 from foolscap import base32
 
+
 TIME_FORMAT = "%Y-%m-%d--%H-%M-%S"
+
 
 class IncidentQualifier:
     """I am responsible for deciding what qualifies as an Incident. I look at
@@ -36,6 +42,7 @@ class IncidentQualifier:
     def event(self, ev):
         if self.check_event(ev) and self.handler:
             self.handler.declare_incident(ev)
+
 
 @implementer(IIncidentReporter)
 class IncidentReporter:
@@ -108,12 +115,11 @@ class IncidentReporter:
 
         # use self.logger.buffers, copy events into logfile
         events = list(self.logger.get_buffered_events())
-        events.sort(lambda a,b: cmp(a['num'], b['num']))
+        events.sort(key=O.itemgetter('num'))
+
         for e in events:
-            flogfile.serialize_wrapper(self.f1, e,
-                                       from_=self.tubid_s, rx_time=now)
-            flogfile.serialize_wrapper(self.f2, e,
-                                       from_=self.tubid_s, rx_time=now)
+            flogfile.serialize_wrapper(self.f1, e, from_=self.tubid_s, rx_time=now)
+            flogfile.serialize_wrapper(self.f2, e, from_=self.tubid_s, rx_time=now)
 
         self.f1.flush()
         # the BZ2File has no flush method
@@ -133,10 +139,8 @@ class IncidentReporter:
         self.remaining_events -= 1
         if self.remaining_events >= 0:
             now = time.time()
-            flogfile.serialize_wrapper(self.f1, ev,
-                                       from_=self.tubid_s, rx_time=now)
-            flogfile.serialize_wrapper(self.f2, ev,
-                                       from_=self.tubid_s, rx_time=now)
+            flogfile.serialize_wrapper(self.f1, ev, from_=self.tubid_s, rx_time=now)
+            flogfile.serialize_wrapper(self.f2, ev, from_=self.tubid_s, rx_time=now)
             return
 
         self.stop_recording()
@@ -192,7 +196,6 @@ class ClassifyOptions(usage.Options):
 
 
 class IncidentClassifierBase:
-
     def __init__(self):
         self.classifiers = []
 
@@ -205,9 +208,12 @@ class IncidentClassifierBase:
         for fn in os.listdir(plugindir):
             if not (fn.startswith("classify_") and fn.endswith(".py")):
                 continue
-            f = open(os.path.join(plugindir, fn), "r")
+
             localdict = {}
-            exec(f, localdict)
+
+            with open(os.path.join(plugindir, fn)) as f:
+                exec(f.read(), localdict)
+
             self.add_classifier(localdict["classify_incident"])
 
     def load_incident(self, abs_fn):
@@ -231,25 +237,32 @@ class IncidentClassifierBase:
             categories.add("unknown")
         return categories
 
+
 class IncidentClassifier(IncidentClassifierBase):
     def run(self, options):
         self.add_classify_files(options["classifier-directory"])
         out = options.stdout
+
         for f in options.files:
             abs_fn = os.path.expanduser(f)
             incident = self.load_incident(abs_fn)
             categories = self.classify_incident(incident)
-            print >>out, "%s: %s" % (f, ",".join(sorted(categories)))
+
+            print("%s: %s" % (f, ",".join(sorted(categories))), file=out)
+
             if list(categories) == ["unknown"] and options["verbose"]:
                 (header, events) = incident
                 trigger = header["trigger"]
+
                 from foolscap.logging.log import format_message
-                print >>out, format_message(trigger)
-                pprint(trigger, stream=out)
+
+                print(format_message(trigger), file=out)
+                pprint.pprint(trigger, stream=out)
+
                 if 'failure' in trigger:
-                    print >>out," FAILURE:"
+                    print(" FAILURE:", file=out)
                     lines = str(trigger['failure']).split("\n")
                     for line in lines:
-                        print >>out, " %s" % (line,)
-                print >>out, ""
+                        print(" %s" % (line,), file=out)
 
+                print('', file=out)

@@ -1,15 +1,19 @@
 
-from __future__ import print_function
 import os, sys, time
+
 from zope.interface import implementer
+
 from twisted.internet import reactor
 from twisted.python import usage
+
 from foolscap import base32
 from foolscap.api import Tub, Referenceable, fireEventually
 from foolscap.logging import log, flogfile
 from foolscap.referenceable import SturdyRef
 from foolscap.util import format_time, FORMAT_TIME_MODES
-from interfaces import RILogObserver
+
+from .interfaces import RILogObserver
+
 
 def short_tubid_b2a(tubid):
     return base32.encode(tubid)[:8]
@@ -107,7 +111,7 @@ class LogPrinter(Referenceable):
         print("%s L%d [%s]#%d %s" % (time_s, level, tubid,
                                      d["num"], msg),
               file=self.output)
-        
+
         if 'failure' in d:
             print(" FAILURE:", file=self.output)
             lines = str(d['failure']).split("\n")

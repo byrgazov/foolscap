@@ -1,5 +1,7 @@
 
-import time, urllib
+import time
+import urllib.parse
+
 from twisted.internet import reactor, endpoints
 from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.python import usage
@@ -32,6 +34,7 @@ class WebViewerOptions(usage.Options):
             raise usage.UsageError("--timestamps= must be one of (%s)" %
                                    ", ".join(FORMAT_TIME_MODES))
         self["timestamps"] = arg
+
 
 FLOG_CSS = """
 span.MODELINE {
@@ -70,6 +73,7 @@ span.BAD {
 
 """
 
+
 def web_format_time(t, mode="short-local"):
     time_s = format_time(t, mode)
     time_utc = format_time(t, "utc")
@@ -78,8 +82,11 @@ def web_format_time(t, mode="short-local"):
     extended = "Local=%s  Local=%s  UTC=%s" % (time_ctime, time_local, time_utc)
     return time_s, extended
 
+
 def web_escape(u):
-    return html.escape(u.encode("utf-8"))
+#   return html.escape(u.encode("utf-8"))
+    return html.escape(u)
+
 
 class Welcome(resource.Resource):
     def __init__(self, viewer, timestamps):
@@ -161,8 +168,10 @@ class Welcome(resource.Resource):
         data += '</form>\n'
 
         data += "</body></html>"
-        req.setHeader("content-type", "text/html")
-        return data
+
+        req.setHeader("content-type", "text/html; charset=utf-8")
+        return data.encode('utf8')
+
 
 class Summary(resource.Resource):
     def __init__(self, viewer):
@@ -170,14 +179,14 @@ class Summary(resource.Resource):
         resource.Resource.__init__(self)
 
     def getChild(self, path, req):
-        if "-" in path:
-            lfnum,levelnum = [int(x) for x in path.split("-")]
+        if b'-' in path:
+            lfnum,levelnum = [int(x) for x in path.split(b'-')]
             lf = self._viewer.logfiles[lfnum]
-            (first, last, num_events, levels,
-             pid, versions) = self._viewer.summaries[lf]
+            (first, last, num_events, levels, pid, versions) = self._viewer.summaries[lf]
             events = levels[levelnum]
             return SummaryView(events, levelnum)
         return resource.Resource.getChild(self, path, req)
+
 
 class SummaryView(resource.Resource):
     def __init__(self, events, levelnum):
@@ -194,13 +203,16 @@ class SummaryView(resource.Resource):
         data += "<h1>Events at level %d</h1>\n" % self._levelnum
 
         data += "<ul>\n"
+
         for e in self._events:
             data += "<li>" + e.to_html("/all-events") + "</li>\n"
+
         data += "</ul>\n"
         data += "</body>\n"
         data += "</html>\n"
-        return data
 
+        req.setHeader("content-type", "text/html; charset=utf-8")
+        return data.encode('utf8')
 
 
 class EventView(resource.Resource):
@@ -237,9 +249,11 @@ class EventView(resource.Resource):
         data += modeline
 
         data += "<ul>\n"
+
         if sortby == "nested":
             for e in self.viewer.root_events:
                 data += self._emit_events(0, e, timestamps)
+
         elif sortby == "number":
             numbers = sorted(self.viewer.number_map.keys())
             for n in numbers:
@@ -247,19 +261,23 @@ class EventView(resource.Resource):
                 data += '<li><span class="%s">' % e.level_class()
                 data += e.to_html(timestamps=timestamps)
                 data += '</span></li>\n'
+
         elif sortby == "time":
             events = self.viewer.number_map.values()
-            events.sort(lambda a,b: cmp(a.e['d']['time'], b.e['d']['time']))
+            events.sort(key=lambda item: item['d']['time'])
+
             for e in events:
                 data += '<li><span class="%s">' % e.level_class()
                 data += e.to_html(timestamps=timestamps)
                 data += '</span></li>\n'
+
         else:
             data += "<b>unknown sort argument '%s'</b>\n" % sortby
 
         data += "</ul>\n"
-        req.setHeader("content-type", "text/html")
-        return data
+
+        req.setHeader("content-type", "text/html; charset=utf-8")
+        return data.encode('utf8')
 
     def _emit_events(self, indent, event, timestamps):
         indent_s = " " * indent
@@ -282,16 +300,21 @@ class LogEvent:
         self.parent = None
         self.children = []
         self.index = None
-        self.anchor_index = "no-number"
-        self.incarnation = base32.encode(e['d']['incarnation'][0])
+        self.anchor_index = 'no-number'
+
+        self.incarnation = base32.encode(e['d']['incarnation'][0].encode('ascii')).decode('ascii')
+
         if 'num' in e['d']:
             self.index = (e['from'], e['d']['num'])
-            self.anchor_index = "%s_%s_%d" % (urllib.quote(e['from'].encode("utf-8")),
-                                              self.incarnation.encode("utf-8"),
+            self.anchor_index = "%s_%s_%d" % (urllib.parse.quote(e['from']),
+                                              self.incarnation,
                                               e['d']['num'])
+
         self.parent_index = None
+
         if 'parent' in e['d']:
             self.parent_index = (e['from'], e['d']['parent'])
+
         self.is_trigger = False
 
     LEVELMAP = {
@@ -337,19 +360,19 @@ class LogEvent:
             data += " [INCIDENT-TRIGGER]"
         return data
 
-class Reload(resource.Resource):
 
+class Reload(resource.Resource):
     def __init__(self, viewer):
         self.viewer = viewer
         resource.Resource.__init__(self)
 
     def render_POST(self, req):
         self.viewer.load_logfiles()
-        req.redirect("/")
-        return ''
+        req.redirect(b'/')
+        return b''
+
 
 class WebViewer:
-
     def run(self, options):
         d = fireEventually(options)
         d.addCallback(self.start)
@@ -365,17 +388,21 @@ class WebViewer:
     def start(self, options):
         root = static.Data("placeholder", "text/plain")
         welcome = Welcome(self, options["timestamps"])
-        root.putChild("", welcome)
-        root.putChild("welcome", welcome) # we used to only do this
-        root.putChild("reload", Reload(self))
-        root.putChild("all-events", EventView(self))
-        root.putChild("summary", Summary(self))
-        root.putChild("flog.css", static.Data(FLOG_CSS, "text/css"))
+
+        root.putChild(b'', welcome)
+        root.putChild(b'welcome', welcome) # we used to only do this
+        root.putChild(b'reload', Reload(self))
+        root.putChild(b'all-events', EventView(self))
+        root.putChild(b'summary', Summary(self))
+        root.putChild(b'flog.css', static.Data(FLOG_CSS, "text/css"))
+
         s = server.Site(root)
 
         port = options["port"]
+
         if not port:
             port = "tcp:%d:interface=127.0.0.1" % allocate_tcp_port()
+
         ep = endpoints.serverFromString(reactor, port)
         self.lp = yield ep.listen(s)
         portnum = self.lp.getHost().port
@@ -384,12 +411,14 @@ class WebViewer:
 
         if not options["quiet"]:
             print("scanning..")
+
         self.logfiles = [options.dumpfile]
         self.load_logfiles()
 
         if not options["quiet"]:
             print("please point your browser at:")
             print(url)
+
         if options["open"]:
             import webbrowser
             webbrowser.open(url)
@@ -429,22 +458,29 @@ class WebViewer:
                         trigger_numbers.append(t["num"])
                     pid = h.get("pid")
                     versions = h.get("versions", {})
+
                 if "d" not in e:
                     continue # skip headers
+
                 if not first_event_from:
                     first_event_from = e['from']
+
                 le = LogEvent(e)
+
                 if le.index:
                     number_map[le.index] = le
+
                 if le.parent_index in number_map:
                     le.parent = number_map[le.parent_index]
                     le.parent.children.append(le)
                 else:
                     roots.append(le)
+
                 d = e['d']
                 level = d.get("level", "NORMAL")
                 number = d.get("num", None)
                 when = d.get("time")
+
                 if number in trigger_numbers:
                     le.is_trigger = True
 

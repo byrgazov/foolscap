@@ -334,10 +334,12 @@ class Tub(service.MultiService):
 
     def setLogGathererFURL(self, gatherer_furl_or_furls):
         assert not self._log_gatherer_furls
-        if isinstance(gatherer_furl_or_furls, basestring):
+
+        if type(gatherer_furl_or_furls) is str:
             self._log_gatherer_furls.append(gatherer_furl_or_furls)
         else:
             self._log_gatherer_furls.extend(gatherer_furl_or_furls)
+
         self._maybeConnectToGatherer()
 
     def setLogGathererFURLFile(self, gatherer_furlfile):
@@ -1003,12 +1005,15 @@ class Tub(service.MultiService):
         # that's waiting on a remote broker to complete).
         output = []
         all_brokers = self.brokers.items()
+
         for tubref,_broker in all_brokers:
             inbound = _broker.inboundDeliveryQueue[:]
             outbound = [pr
                         for (reqID, pr) in
                         sorted(_broker.waitingForAnswers.items()) ]
             output.append( (str(tubref), inbound, outbound) )
-        output.sort(lambda x,y: cmp( (len(x[1]), len(x[2])),
-                                     (len(y[1]), len(y[2])) ))
+
+#       output.sort(lambda x, y: cmp((len(x[1]), len(x[2])), (len(y[1]), len(y[2]))))
+        output.sort(key=lambda item: (len(item[1]), len(item[2])))
+
         return output

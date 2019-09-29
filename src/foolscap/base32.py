@@ -2,6 +2,9 @@
 # copied from the waterken.org Web-Calculus python implementation
 
 def encode(input):
+    if type(input) is not bytes:
+        raise TypeError('expected <bytes>', type(input))
+
     output = []
     buffer = 0
     n = 0

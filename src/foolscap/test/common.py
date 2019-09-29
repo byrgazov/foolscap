@@ -199,6 +199,7 @@ class StallMixin:
         reactor.callLater(timeout, d.callback, res)
         return d
 
+
 class TargetMixin(PollMixin, StallMixin):
 
     def setUp(self):
