@@ -1,9 +1,8 @@
-include ChangeLog.0.6.4 MANIFEST.in NEWS LICENSE README.packagers
+include MANIFEST.in NEWS LICENSE README.packagers
 include doc/*.txt doc/*.rst
 include doc/listings/*.py
 include doc/specifications/*.rst
 include Makefile
-include tox.ini .coveragerc
 include misc/classify_foolscap.py
 include versioneer.py
 include src/foolscap/_version.py
