@@ -138,8 +138,10 @@ class RootSlicer:
         if self.objectSentDeferred:
             self.objectSentDeferred.errback(why)
             self.objectSentDeferred = None
+
         for obj, d in self.sendQueue:
             d.errback(why)
+
         self.sendQueue = []
 
 

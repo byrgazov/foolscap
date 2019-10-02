@@ -301,10 +301,6 @@ class TestBananaMixin:
         d = self.banana.prepare()
         d.addCallback(results.append)
 
-        #print('--', stream, ':', bytes(self.banana.buffer))
-        #print( '--', len(self.banana.receiveStack), self.banana.receiveStack[-1].constraint)
-        #self.banana.initSend()
-
         self.banana.initReceive()  # [bw]
         self.banana.dataReceived(stream)
 
@@ -416,7 +412,8 @@ class ReallyBrokenDictUnslicer(DictUnslicer):
 
 class DecodeTest(UnbananaTestMixin, unittest.TestCase):
     def setUp(self):
-        UnbananaTestMixin.setUp(self)
+        super().setUp()
+
         self.banana.logReceiveErrors = False
 
         d = {
@@ -435,6 +432,7 @@ class DecodeTest(UnbananaTestMixin, unittest.TestCase):
 
     def tearDown(self):
         storage.InstanceSlicer.pickle_protocol = self.original_InstanceSlicer_pickle_protocol
+        super().tearDown()
 
     def test_simple_list(self):
         """simple list"""

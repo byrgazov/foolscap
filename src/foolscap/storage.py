@@ -664,7 +664,7 @@ class StorageBanana(banana.Banana):
     object    = None
     violation = None
     disconnectReason = None
-    slicerClass = StorageRootSlicer
+    slicerClass   = StorageRootSlicer
     unslicerClass = StorageRootUnslicer
 
     def prepare(self):
@@ -687,8 +687,9 @@ class StorageBanana(banana.Banana):
 
     def reportViolation(self, fail):
         self.violation = fail
-        # @todo: [bw] ???
-        self.d.errback(fail)  # -or- fail.raiseException()
+        # @todo: [bw] ??? может зависнуть (кажется из-за bytes/str это было), см. git:3a30fbd5 test_serialize (кажется Serialize.test_copyable)
+        #        но с этим кодом ломаются некоторые тесты, например: L{foolscap.test.test_banana.DecodeTest.test_failed_dict3}
+        #self.d.errback(fail)  # -or- fail.raiseException()
 
     def reportReceiveError(self, fail):
         self.disconnectReason = fail
@@ -723,6 +724,7 @@ def serialize(obj, outstream=None, root_class=StorageRootSlicer, banana=None):
 
     b.transport = SerializerTransport(sio)
     b.connectionMade()
+
     d = b.send(obj)
 
     def _report_error(res):
