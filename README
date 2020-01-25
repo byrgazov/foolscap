@@ -20,6 +20,16 @@ have well-known FURLs.
 
 Full documentation and examples are in the doc/ directory.
 
+ABOUT THIS FORK:
+
+ Я к херам сломал протокол, извините, Из-за строк невозможно заставить
+ вместе работать Python 2 и Python 3, так что эта версия Foolscap не совместима
+ с оригинальной.
+
+ В дальнейшем всё здесь будет похерено, например, планирую отвязаться от Twisted и
+ заняться оптимизацией. Так же мне нужна аутентификация Kerberos5, буду пилить.
+
+
 DEPENDENCIES:
 
  * Python 3.5 or later
@@ -85,9 +95,3 @@ AUTHOR:
 
  Foolscap is distributed under the same license as Twisted itself, namely the
  MIT license. Details are in the LICENSE file.
-
-ABOUT THIS FORK:
-
- Я к херам сломал протокол, извините, Из-за строк невозможно заставить
- вместе работать Python 2 и Python 3, так что эта версия Foolscap не совместима
- с оригинальной.
