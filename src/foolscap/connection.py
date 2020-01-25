@@ -1,14 +1,16 @@
 import time
+
 from twisted.python.failure import Failure
-from twisted.internet import protocol, reactor, error, defer
-from foolscap.tokens import (NoLocationHintsError, NegotiationError,
-                             RemoteNegotiationError)
-from foolscap.info import ConnectionInfo
+from twisted.internet       import protocol, reactor, error, defer
+
+from foolscap.tokens  import NoLocationHintsError, NegotiationError, RemoteNegotiationError
+from foolscap.info    import ConnectionInfo
 from foolscap.logging import log
 from foolscap.logging.log import CURIOUS, UNUSUAL, OPERATIONAL
-from foolscap.util import isSubstring
-from foolscap.ipb import InvalidHintError
+from foolscap.util    import isSubstring
+from foolscap.ipb     import InvalidHintError
 from foolscap.connections.tcp import convert_legacy_hint
+
 
 class TubConnectorFactory(protocol.Factory, object):
     # this is for internal use only. Application code should use
@@ -43,11 +45,13 @@ class TubConnectorFactory(protocol.Factory, object):
         proto.factory = self
         return proto
 
+
 def describe_handler(h):
     try:
         return h.describe()
     except AttributeError:
         return repr(h)
+
 
 def get_endpoint(location, connectionPlugins, connectionInfo):
     def _update_status(status):
@@ -67,7 +71,8 @@ def get_endpoint(location, connectionPlugins, connectionInfo):
         return plugin.hint_to_endpoint(hint, reactor, _update_status)
     return defer.maybeDeferred(_try)
 
-class TubConnector(object):
+
+class TubConnector:
     """I am used to make an outbound connection. I am given a target TubID
     and a list of locationHints, and I try all of them until I establish a
     Broker connected to the target. I will consider redirections returned
@@ -89,8 +94,7 @@ class TubConnector(object):
     timer = None
 
     def __init__(self, parent, tubref, connectionPlugins):
-        self._logparent = log.msg(format="TubConnector created from "
-                                  "%(fromtubid)s to %(totubid)s",
+        self._logparent = log.msg(format="TubConnector created from %(fromtubid)s to %(totubid)s",
                                   fromtubid=parent.tubID,
                                   totubid=tubref.getTubID(),
                                   level=OPERATIONAL,

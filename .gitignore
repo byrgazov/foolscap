@@ -10,7 +10,7 @@ __pycache__
 /share/
 /src/foolscap.egg-info/
 /_trial_temp*/
-/.eggs/
+/.eggs
 /.eggs-develop/
 /.tox/
 /.coverage

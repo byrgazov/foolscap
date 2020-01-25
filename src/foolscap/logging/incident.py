@@ -5,13 +5,13 @@ import pprint
 
 from zope.interface import implementer
 
-from twisted.python import usage
+from twisted.python   import usage
 from twisted.internet import reactor
 
 from foolscap.logging.interfaces import IIncidentReporter
-from foolscap.logging import levels, app_versions, flogfile
+from foolscap.logging  import levels, app_versions, flogfile
 from foolscap.eventual import eventually
-from foolscap.util import move_into_place
+from foolscap.util     import move_into_place
 from foolscap import base32
 
 
@@ -171,8 +171,8 @@ class IncidentReporter:
         os.unlink(self.abs_filename)
 
         # now we can tell the world about our new incident report
-        eventually(self.logger.incident_recorded,
-                   self.abs_filename_bz2, self.name, self.trigger)
+        eventually(self.logger.incident_recorded, self.abs_filename_bz2, self.name, self.trigger)
+
 
 class NonTrailingIncidentReporter(IncidentReporter):
     TRAILING_DELAY = None

@@ -74,7 +74,7 @@ class Count:
 class FoolscapLogger:
     DEFAULT_SIZELIMIT = 100
     DEFAULT_THRESHOLD = NOISY
-    MAX_RECORDED_INCIDENTS = 20 # records filenames of incident logfiles
+    MAX_RECORDED_INCIDENTS = 20  # records filenames of incident logfiles
 
     def __init__(self):
         self.incarnation = self.get_incarnation()
@@ -192,51 +192,49 @@ class FoolscapLogger:
     def _msg(self, *args, **kwargs):
         facility = kwargs.get('facility')
 
-        if "level" not in kwargs:
+        if 'level' not in kwargs:
             kwargs['level'] = OPERATIONAL
 
-        level = kwargs["level"]
+        level = kwargs['level']
         threshold = self.get_generation_threshold(facility)
 
-        if level < threshold:
-            return # not worth logging
+        if threshold <= level:
+            event = kwargs
+            # kwargs always has 'num'
 
-        event = kwargs
-        # kwargs always has 'num'
+            if 'format' in event:
+                pass
+            elif 'message' in event:
+                event['message'] = str(event['message'])
+            elif args:
+                event['message'], posargs = str(args[0]), args[1:]
+                if posargs:
+                    event['args'] = posargs
+            else:
+                event['message'] = ''
 
-        if "format" in event:
-            pass
-        elif "message" in event:
-            event['message'] = str(event['message'])
-        elif args:
-            event['message'], posargs = str(args[0]), args[1:]
-            if posargs:
-                event['args'] = posargs
-        else:
-            event['message'] = ""
+            if 'time' not in event:
+                event['time'] = time.time()
 
-        if "time" not in event:
-            event['time'] = time.time()
+            if event.get('stacktrace', False) is True:
+                event['stacktrace'] = traceback.format_stack()
 
-        if event.get('stacktrace', False) is True:
-            event['stacktrace'] = traceback.format_stack()
-
-        event['incarnation'] = self.incarnation
-        self.add_event(facility, level, event)
+            event['incarnation'] = self.incarnation
+            self.add_event(facility, level, event)
 
     def err(self, _stuff=None, _why=None, **kw):
-        """
-        Write a failure to the log.
-        """
+        """Write a failure to the log."""
+
         if _stuff is None:
             _stuff = failure.Failure()
+
         if isinstance(_stuff, failure.Failure):
             return self.msg(failure=_stuff, why=_why, isError=1, **kw)
-        elif isinstance(_stuff, Exception):
-            return self.msg(failure=failure.Failure(_stuff), why=_why,
-                            isError=1, **kw)
-        else:
-            return self.msg(repr(_stuff), why=_why, isError=1, **kw)
+
+        if isinstance(_stuff, Exception):
+            return self.msg(failure=failure.Failure(_stuff), why=_why, isError=1, **kw)
+
+        return self.msg(repr(_stuff), why=_why, isError=1, **kw)
 
     def add_event(self, facility, level, event):
         # send to observers
@@ -284,7 +282,7 @@ class FoolscapLogger:
             ir.new_trigger(triggering_event)
             return
         if self.logdir: # just in case
-            ir = self.incident_reporter_factory(self.logdir, self, "local")
+            ir = self.incident_reporter_factory(self.logdir, self, 'local')
             self.active_incident_reporter_weakref = weakref.ref(ir)
             ir.incident_declared(triggering_event) # this takes a few seconds
 

@@ -215,6 +215,7 @@ class Advanced(unittest.TestCase):
         n2 = l.msg("two", parent=n)
         l.msg("three", parent=n2)
 
+
 class ErrorfulQualifier(incident.IncidentQualifier):
     def __init__(self):
         self._first = True
@@ -224,6 +225,7 @@ class ErrorfulQualifier(incident.IncidentQualifier):
             self._first = False
             raise ValueError("oops")
         return False
+
 
 class NoStdio(unittest.TestCase):
     # bug #244 is caused, in part, by Foolscap-side logging failures which
